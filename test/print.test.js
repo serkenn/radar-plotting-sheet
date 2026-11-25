@@ -88,7 +88,7 @@ test('the speed-vector method is carried into the printed report', () => {
   const knotsPerMile = chooseSpeedScale(model, range);
   assert.equal(knotsPerMile, 2, '23 knots on a 12 mile sheet needs one mile per two knots');
   const seen = visible(buildPrintPages({ model, range, active: 0, step: 5, content: 'report', method: 'speed', knotsPerMile }));
-  for (const text of ['相対（転移）269.5°・30.1kn', '新しい相対（転移）', '新針路 097.5°', '新速力 3.6kn', '1 海里の目盛り ＝ 2 ノット', '速力三角形だけを抜き出した図']) {
+  for (const text of ['相対（転移）269.5°・30.1kn', '新しい相対（転移）', '新針路 097.5°', '新速力 3.6kn', '1 海里の目盛り＝2 ノット', '速力三角形だけを抜き出した図']) {
     assert.ok(seen.includes(text), text);
   }
 });
@@ -103,23 +103,45 @@ test('the speed scale keeps the fastest vector on the sheet', () => {
 
 test('range and speed scale are chosen together', () => {
   const model = buildModel(preset('starboard')); // own 12 kn, target 21.1 kn, plots out to 12 miles
-  assert.deepEqual(chooseScales(model, 'auto', 'speed', 'auto'), { range: 12, knotsPerMile: 2 });
-  // one knot per mile: the range grows until the 21 knot vector fits
-  assert.deepEqual(chooseScales(model, 'auto', 'speed', '1'), { range: 24, knotsPerMile: 1 });
-  // a range fixed by hand is kept
-  assert.deepEqual(chooseScales(model, '12', 'speed', '1'), { range: 12, knotsPerMile: 1 });
-  // the distance-vector method never widens the range for vectors
-  assert.equal(chooseScales(model, 'auto', 'distance', '1').range, 12);
+  // default: one scale for the whole sheet, so the range grows until the 21 knot vector fits
+  assert.deepEqual(chooseScales(model, 'auto', 'speed', 'auto'), { range: 24, knotsPerMile: 1 });
+  // "fit": the range follows the plots and the vectors get a scale of their own
+  assert.deepEqual(chooseScales(model, 'auto', 'speed', 'fit'), { range: 12, knotsPerMile: 2 });
+  assert.deepEqual(chooseScales(model, 'auto', 'speed', '2'), { range: 12, knotsPerMile: 2 });
+  assert.deepEqual(chooseScales(model, 'auto', 'speed', '10'), { range: 12, knotsPerMile: 10 });
+  // a range fixed by hand is kept; on "auto" the vectors are shrunk rather than lost
+  assert.deepEqual(chooseScales(model, '12', 'speed', 'auto'), { range: 12, knotsPerMile: 2 });
+  assert.deepEqual(chooseScales(model, '48', 'speed', 'auto'), { range: 48, knotsPerMile: 1 });
+  // the distance-vector method has no speed vectors to make room for
+  assert.deepEqual(chooseScales(model, 'auto', 'distance', 'auto'), { range: 12, knotsPerMile: 1 });
+  // slow ships already fit: nothing changes
+  assert.deepEqual(chooseScales(buildModel(preset('three-plots')), 'auto', 'speed', 'auto'), { range: 12, knotsPerMile: 1 });
   assert.equal(scaleTimeBase(1), '1 時間ぶん');
   assert.equal(scaleTimeBase(2), '30 分ぶん');
   assert.equal(scaleTimeBase(10), '6 分ぶん');
 });
 
-test('the printed report states the speed scale', () => {
+test('with one scale the printed report shows a single set of figures', () => {
   const model = buildModel(preset('starboard'));
   const { range, knotsPerMile } = chooseScales(model, 'auto', 'speed', 'auto');
+  const html = buildPrintPages({ model, range, active: 0, step: 5, content: 'report', method: 'speed', knotsPerMile });
+  const seen = visible(html);
+  assert.ok(seen.includes('レンジ 24 海里（速力の矢印も同じ目盛り）'));
+  assert.ok(seen.includes('位置と同じ目盛り（1 海里＝1 ノット、1 時間ぶんの距離）'));
+  assert.ok(seen.includes('海里（速力の矢印はノット）'), 'the scale bar says what the vectors are measured in');
+  // the sheet itself carries no second set of ring figures; only the triangle-only view reads in knots
+  const [sheet, detail] = html.split('<section class="box box-detail">');
+  const ringKnots = /\n\d+(\.\d+)?kn\n/; // a ring figure in knots stands alone, unlike "自船 300°・12.0kn"
+  assert.ok(!ringKnots.test(visible(sheet.slice(0, sheet.indexOf('<div class="page-side">')))));
+  assert.ok(visible(detail).includes('\n12kn\n'));
+  assert.ok(!seen.includes('12海里'), 'nothing on the page still reads as a 12 mile sheet');
+});
+
+test('with a separate vector scale the two sets of figures carry their units', () => {
+  const model = buildModel(preset('starboard'));
+  const { range, knotsPerMile } = chooseScales(model, 'auto', 'speed', 'fit');
   const seen = visible(buildPrintPages({ model, range, active: 0, step: 5, content: 'report', method: 'speed', knotsPerMile }));
-  assert.ok(seen.includes('速力の矢印 1 海里＝2 ノット'));
+  assert.ok(seen.includes('レンジ 12 海里　速力の矢印は 1 海里＝2 ノット'));
   assert.ok(seen.includes('30 分ぶんの距離'));
-  assert.ok(seen.includes('\n12kn\n'));
+  assert.ok(seen.includes('\n24kn\n') && seen.includes('\n12海里\n'));
 });

@@ -26,15 +26,22 @@ const fmtPlain = (value) => String(Math.round(value * 100) / 100);
 const BLANK = '<span class="blank"></span>';
 const signed = (value) => `${value >= 0 ? '+' : '−'}${fmtAngle(Math.abs(value))}`;
 
-function sheetSvg(scene, range) {
+function sheetSvg(scene, range, unit) {
   const view = fullView(SHEET, SHEET, range);
   const left = SHEET / 2 - view.ppm * range;
   return (
     `<svg class="sheet static" viewBox="0 0 ${SHEET} ${SHEET_HEIGHT}" role="img" aria-label="プロッティング用紙">` +
     renderSheet(view, scene) +
-    renderScaleBar(view, range, left, SHEET - 4) +
+    renderScaleBar(view, range, left, SHEET - 4, unit) +
     '</svg>'
   );
+}
+
+/** How the speed vectors are scaled, in words. One mile = one knot means the sheet has a single scale. */
+function vectorScaleText(knotsPerMile) {
+  return knotsPerMile === 1
+    ? '位置と同じ目盛り（1 海里＝1 ノット、1 時間ぶんの距離）'
+    : `1 海里の目盛り＝${fmtPlain(knotsPerMile)} ノット（${scaleTimeBase(knotsPerMile)}の距離）。上側の軸の kn の数字で読む`;
 }
 
 function avoidCondition(target) {
@@ -147,7 +154,7 @@ function resultBox(kind, ctx) {
   if (anyAvoid) rows.push(['避航<small>新針路・新速力</small>', 'avoid', (s, target) => avoidResult(target, multi)]);
   const scaleNote =
     report && ctx.method === 'speed' && step >= TRIANGLE_STEP
-      ? `<p class="condition">速力の矢印：1 海里の目盛り ＝ ${fmtPlain(ctx.knotsPerMile)} ノット（${scaleTimeBase(ctx.knotsPerMile)}の距離）。用紙の上側の軸に kn の目盛り</p>`
+      ? `<p class="condition">速力の矢印：${vectorScaleText(ctx.knotsPerMile)}</p>`
       : '';
 
   const cell = (target, stepName, fill) => {
@@ -213,12 +220,15 @@ function page(kind, ctx) {
       : { range, step: 0, own: null, targets: [], loose: [], blank: true };
   const tag = { report: 'レポート', problem: '問題用紙', blank: '' }[kind];
   const vectors = kind === 'report' && ctx.method === 'speed' && step >= TRIANGLE_STEP;
+  const ownScale = vectors && ctx.knotsPerMile !== 1;
+  const scaleHead = !vectors ? '' : ownScale ? `　速力の矢印は 1 海里＝${fmtPlain(ctx.knotsPerMile)} ノット` : '（速力の矢印も同じ目盛り）';
+  const barUnit = !vectors ? '海里' : ownScale ? `海里（速力の矢印は 1 海里＝${fmtPlain(ctx.knotsPerMile)} ノット）` : '海里（速力の矢印はノット）';
 
   return (
     `<section class="page page-${kind}">` +
-    `<div class="page-sheet">${sheetSvg(scene, range)}</div>` +
+    `<div class="page-sheet">${sheetSvg(scene, range, barUnit)}</div>` +
     '<div class="page-side">' +
-    `<header class="page-head"><h2>レーダー・プロッティング用紙</h2><p>${tag ? `<span class="page-kind">${tag}</span>` : ''}<span>レンジ ${fmtPlain(range)} 海里${vectors ? `　速力の矢印 1 海里＝${fmtPlain(ctx.knotsPerMile)} ノット` : ''}</span></p></header>` +
+    `<header class="page-head"><h2>レーダー・プロッティング用紙</h2><p>${tag ? `<span class="page-kind">${tag}</span>` : ''}<span>レンジ ${fmtPlain(range)} 海里${scaleHead}</span></p></header>` +
     givenBox(kind, ctx) +
     resultBox(kind, ctx) +
     detailBox(kind, ctx, scene) +

@@ -11,7 +11,7 @@ import { formatTime, toHalfWidth } from './solve.js';
 const MAX_TARGETS = 3;
 const MAX_OBS = 4;
 const RANGE_CHOICES = ['auto', '3', '6', '12', '24', '48'];
-const SCALE_CHOICES = ['auto', '1', '2', '4', '5', '10'];
+const SCALE_CHOICES = ['auto', 'fit', '2', '4', '5', '10'];
 const LAST_STEP = STEPS.length - 1;
 const AVOID_STEP = STEPS.indexOf('avoid');
 const MAX_ZOOM = 150;
@@ -330,7 +330,9 @@ function resultRows(target) {
     rows.push(
       row(
         '速力ベクトルの縮尺',
-        `<b>1 海里の目盛り ＝ ${speedScale} ノット</b><small>矢印は ${scaleTimeBase(speedScale)}の距離。自船 ${fmtNum(sol.own.speed)} ノットは ${fmtNum(sol.own.speed / speedScale, 2)} 海里の長さ</small>`,
+        speedScale === 1
+          ? `<b>位置と同じ目盛り</b><small>1 海里＝1 ノット。矢印は 1 時間ぶんの距離で、自船 ${fmtNum(sol.own.speed)} ノットは ${fmtNum(sol.own.speed, 1)} 海里の長さ</small>`
+          : `<b>1 海里の目盛り ＝ ${speedScale} ノット</b><small>矢印は ${scaleTimeBase(speedScale)}の距離。自船 ${fmtNum(sol.own.speed)} ノットは ${fmtNum(sol.own.speed / speedScale, 2)} 海里の長さ。上側の軸の kn の数字で読む</small>`,
       ),
     );
   }
@@ -480,7 +482,10 @@ function renderSteps() {
   if (state.step === STEPS.indexOf('triangle')) {
     text = TRIANGLE_TEXT[state.method];
     if (state.method === 'speed') {
-      text += `矢印の長さは「1 海里の目盛り＝${speedScale} ノット」で取っています（用紙の上側の軸に kn の目盛りがあります）。`;
+      text +=
+        speedScale === 1
+          ? '矢印の長さは位置と同じ目盛りで取っています（1 海里＝1 ノット、1 時間ぶんの距離）。'
+          : `矢印の長さは「1 海里の目盛り＝${speedScale} ノット」で取っています（用紙の上側の軸の kn の数字で読みます）。`;
     }
   }
   if (state.step === AVOID_STEP) text = avoid.on ? AVOID_TEXT[state.method][avoid.mode] : AVOID_TEXT.off;

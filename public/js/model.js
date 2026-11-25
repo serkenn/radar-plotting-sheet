@@ -78,26 +78,32 @@ function fastestSpeed(model) {
 /**
  * Sheet range and speed-vector scale together.
  *
- * Positions and speed vectors share the sheet but not the scale: positions use the range,
- * vectors use "one mile of the sheet = so many knots". With a scale chosen by the user
- * and the range left to "auto", the range grows until the vectors fit as well; with the
- * scale on "auto", the range follows the plots and the scale is made to fit that range.
+ * In the speed-vector method the vectors are drawn on the same sheet as the plots.
+ * By default ("auto") they also use the same scale, one mile = one knot (a one-hour
+ * run), and the range grows until both the plots and the vectors fit: the whole sheet
+ * then reads on one set of figures. "fit" keeps the range for the plots and shrinks the
+ * vectors to a round scale of their own; a number fixes that scale.
  *
  * @param {'auto' | string} rangeChoice
  * @param {'distance' | 'speed'} method
- * @param {'auto' | string} scaleChoice knots per mile, or "auto"
+ * @param {'auto' | 'fit' | string} scaleChoice
  */
 export function chooseScales(model, rangeChoice, method, scaleChoice) {
-  const fixed = scaleChoice === 'auto' ? null : Number(scaleChoice);
-  let range;
-  if (rangeChoice !== 'auto') {
-    range = Number(rangeChoice);
-  } else {
-    let need = Math.max(0, ...model.targets.map((t) => t.farthest));
-    if (method === 'speed' && fixed) need = Math.max(need, fastestSpeed(model) / fixed);
-    range = need ? RANGES.find((r) => r >= need - 1e-9) ?? RANGES[RANGES.length - 1] : 12;
+  const plots = Math.max(0, ...model.targets.map((t) => t.farthest));
+  const smallestRange = (need) => (need ? RANGES.find((r) => r >= need - 1e-9) ?? RANGES[RANGES.length - 1] : 12);
+  const fixedRange = rangeChoice === 'auto' ? null : Number(rangeChoice);
+  if (method !== 'speed') return { range: fixedRange ?? smallestRange(plots), knotsPerMile: 1 };
+
+  if (scaleChoice === 'fit') {
+    const range = fixedRange ?? smallestRange(plots);
+    return { range, knotsPerMile: chooseSpeedScale(model, range) };
   }
-  return { range, knotsPerMile: fixed ?? chooseSpeedScale(model, range) };
+  const wanted = scaleChoice === 'auto' ? 1 : Number(scaleChoice);
+  const fastest = fastestSpeed(model);
+  const range = fixedRange ?? smallestRange(Math.max(plots, fastest / wanted));
+  // "auto" with a range fixed by hand: vectors that would leave the sheet are shrunk instead.
+  const knotsPerMile = scaleChoice === 'auto' && fastest / wanted > range ? chooseSpeedScale(model, range) : wanted;
+  return { range, knotsPerMile };
 }
 
 /** "1 時間ぶん", "30 分ぶん"…: the run that a speed vector stands for at this scale. */

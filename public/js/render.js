@@ -81,6 +81,12 @@ const LABEL_TRIES = [
   [30, 12],
   [-30, 12],
   [180, 0],
+  [0, 26],
+  [180, 14],
+  [60, 22],
+  [-60, 22],
+  [0, 40],
+  [180, 30],
 ];
 
 class Pen {
@@ -157,8 +163,9 @@ class Pen {
   /**
    * Label placed `gap` pixels from p in the direction of `bearing`. It is kept inside the
    * picture, and moved round its point when the place is already taken by another label.
+   * An optional label is left out when no free place is found.
    */
-  text(p, label, cls, bearing = 0, gap = 9) {
+  text(p, label, cls, bearing = 0, gap = 9, optional = false) {
     const { w, h } = this.view;
     const [x0, y0] = this.xy(p);
     const size = cls.includes('big') ? 14 : cls.includes('small') ? 10.5 : 12;
@@ -189,13 +196,9 @@ class Pen {
 
     let place = layout(0, 0);
     if (onScreen && taken(place.box)) {
-      for (const [turn, extra] of LABEL_TRIES) {
-        const other = layout(turn, extra);
-        if (!taken(other.box)) {
-          place = other;
-          break;
-        }
-      }
+      const free = LABEL_TRIES.map(([turn, extra]) => layout(turn, extra)).find((other) => !taken(other.box));
+      if (free) place = free;
+      else if (optional) return;
     }
     this.boxes.push(place.box);
     this.raw(
@@ -293,14 +296,18 @@ function drawSheet(pen, range, detail, knots = null) {
   }
 
   // Distance figures on the solid rings, just right of the southern axis. Speed vectors
-  // have their own scale: when they are drawn, the same rings are figured in knots on
-  // the northern axis (and only in knots where the triangle is shown alone).
+  // normally share them (one mile = one knot). Only when the vectors are on a scale of
+  // their own are the rings also figured in knots, on the northern axis, and the two
+  // sets are told apart by their units. Where the triangle is shown alone, the rings
+  // are figured in knots only.
+  const ownScale = Boolean(knots) && knots !== 1;
   for (let i = 2; i <= 12; i += 2) {
     if (!(detail && knots)) {
       const [x, y] = pen.xy(vec(180, i * minor));
-      pen.raw(`<text class="range-label" x="${r1(x + 3)}" y="${r1(y - 3)}">${fmtRange(i * minor)}</text>`);
+      const unit = ownScale && i === 12 ? '海里' : '';
+      pen.raw(`<text class="range-label" x="${r1(x + 3)}" y="${r1(y - 3)}">${fmtRange(i * minor)}${unit}</text>`);
     }
-    if (knots) {
+    if (knots && (ownScale || detail)) {
       const [x, y] = pen.xy(vec(0, i * minor));
       const label = `${fmtRange(i * minor * knots)}kn`;
       pen.raw(`<text class="range-label knots" x="${r1(x - 3)}" y="${r1(y + 11)}" text-anchor="end">${label}</text>`);
@@ -317,7 +324,7 @@ function drawSheet(pen, range, detail, knots = null) {
  * Linear distance scale with the same miles-to-pixels ratio as the sheet, for use with dividers.
  * Drawn from `left` to the right; `baseline` is the y of the scale line.
  */
-export function renderScaleBar(view, range, left, baseline) {
+export function renderScaleBar(view, range, left, baseline, unit = '海里') {
   const x = (miles) => r1(left + miles * view.ppm);
   const parts = [`<line class="tick" x1="${x(0)}" y1="${baseline}" x2="${x(range)}" y2="${baseline}"/>`];
   for (let i = 0; i <= 60; i += 1) {
@@ -326,7 +333,7 @@ export function renderScaleBar(view, range, left, baseline) {
     parts.push(`<line class="tick" x1="${x(miles)}" y1="${baseline}" x2="${x(miles)}" y2="${r1(baseline + size)}"/>`);
     if (i % 10 === 0) parts.push(`<text class="tick-label" x="${x(miles)}" y="${baseline + 17}">${fmtRange(miles)}</text>`);
   }
-  parts.push(`<text class="range-label" x="${r1(x(range) + 14)}" y="${baseline + 20}">海里</text>`);
+  parts.push(`<text class="range-label" x="${r1(x(range) + 14)}" y="${baseline + 20}">${esc(unit)}</text>`);
   return parts.join('');
 }
 
@@ -460,7 +467,7 @@ function drawSpeedTriangle(pen, target, scene, avoidShown) {
   if (roomy) {
     const at = add(tgt, scale(back, reach * 0.3));
     const side = bearingOf(back) + (dot(vec(bearingOf(back) - 90, 1), at) >= 0 ? -90 : 90);
-    pen.text(at, '新しい相対（転移）', 'avoid small', side, 12);
+    pen.text(at, '新しい相対（転移）', 'avoid small', side, 12, true);
   }
 }
 

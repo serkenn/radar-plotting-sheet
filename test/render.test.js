@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { cross, len, sub, vec } from '../public/js/geometry.js';
-import { buildModel, chooseRange, chooseSpeedScale } from '../public/js/model.js';
+import { buildModel, chooseRange, chooseScales, chooseSpeedScale } from '../public/js/model.js';
 import { PRESETS } from '../public/js/presets.js';
 import { STEPS, fullView, renderSheet, trianglePoints } from '../public/js/render.js';
 
@@ -85,10 +85,21 @@ test('slowing down in the speed-vector method', () => {
   assert.ok(!seen.includes('新針路'));
 });
 
-test('rings are figured in knots while speed vectors are on the sheet', () => {
+test('a separate vector scale puts knots on the rings, with units on both sets of figures', () => {
   const withVectors = visible(draw('crossing', 'speed'));
   // 12 mile sheet at one mile = two knots: the outer ring reads 24 kn, the 6 mile ring 12 kn
-  for (const label of ['4kn', '12kn', '24kn']) assert.ok(withVectors.includes(`\n${label}\n`), label);
-  assert.ok(!visible(draw('crossing', 'speed', STEPS.indexOf('cpa'))).includes('kn\n'), 'no knots before the triangle');
+  for (const label of ['4kn', '12kn', '24kn', '12海里']) assert.ok(withVectors.includes(`\n${label}\n`), label);
+  assert.ok(!/\n\d+kn\n/.test(visible(draw('crossing', 'speed', STEPS.indexOf('cpa')))), 'no knots before the triangle');
   assert.ok(!visible(draw('crossing', 'distance')).includes('24kn'), 'no knots in the distance-vector method');
+});
+
+test('with one shared scale the rings carry a single set of figures', () => {
+  const { model } = sceneFor('crossing', 'speed');
+  const { range, knotsPerMile } = chooseScales(model, 'auto', 'speed', 'auto');
+  assert.deepEqual({ range, knotsPerMile }, { range: 24, knotsPerMile: 1 });
+  const { scene } = sceneFor('crossing', 'speed');
+  const seen = visible(renderSheet(fullView(900, 900, range), { ...scene, range, knotsPerMile }));
+  assert.ok(seen.includes('\n24\n'), 'outer ring reads 24');
+  assert.ok(!/\n\d+(\.\d+)?(kn|海里)\n/.test(seen), 'no second set of ring figures');
+  assert.ok(seen.includes('自船 040°・15.0kn'));
 });
