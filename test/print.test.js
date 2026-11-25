@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildModel, chooseRange, chooseSpeedScale } from '../public/js/model.js';
+import { buildModel, chooseRange, chooseScales, chooseSpeedScale, scaleTimeBase } from '../public/js/model.js';
 import { PRESETS } from '../public/js/presets.js';
 import { PRINT_CONTENTS, buildPrintPages } from '../public/js/print.js';
 
@@ -99,4 +99,27 @@ test('the speed scale keeps the fastest vector on the sheet', () => {
   const fast = buildModel(preset('three-ships'));
   assert.equal(chooseSpeedScale(fast, 12), 4);
   assert.equal(chooseSpeedScale(fast, 48), 1);
+});
+
+test('range and speed scale are chosen together', () => {
+  const model = buildModel(preset('starboard')); // own 12 kn, target 21.1 kn, plots out to 12 miles
+  assert.deepEqual(chooseScales(model, 'auto', 'speed', 'auto'), { range: 12, knotsPerMile: 2 });
+  // one knot per mile: the range grows until the 21 knot vector fits
+  assert.deepEqual(chooseScales(model, 'auto', 'speed', '1'), { range: 24, knotsPerMile: 1 });
+  // a range fixed by hand is kept
+  assert.deepEqual(chooseScales(model, '12', 'speed', '1'), { range: 12, knotsPerMile: 1 });
+  // the distance-vector method never widens the range for vectors
+  assert.equal(chooseScales(model, 'auto', 'distance', '1').range, 12);
+  assert.equal(scaleTimeBase(1), '1 時間ぶん');
+  assert.equal(scaleTimeBase(2), '30 分ぶん');
+  assert.equal(scaleTimeBase(10), '6 分ぶん');
+});
+
+test('the printed report states the speed scale', () => {
+  const model = buildModel(preset('starboard'));
+  const { range, knotsPerMile } = chooseScales(model, 'auto', 'speed', 'auto');
+  const seen = visible(buildPrintPages({ model, range, active: 0, step: 5, content: 'report', method: 'speed', knotsPerMile }));
+  assert.ok(seen.includes('速力の矢印 1 海里＝2 ノット'));
+  assert.ok(seen.includes('30 分ぶんの距離'));
+  assert.ok(seen.includes('\n12kn\n'));
 });

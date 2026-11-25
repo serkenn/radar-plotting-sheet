@@ -394,6 +394,16 @@ svg.sheet text {
   font-size: 9.5px;
 }
 
+/* the same rings read in knots, for the speed vectors */
+.range-label.knots {
+  fill: var(--own);
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: var(--paper);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
 .centre-mark {
   fill: none;
   stroke: var(--grid-strong);

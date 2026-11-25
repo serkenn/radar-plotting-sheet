@@ -4,6 +4,7 @@ import { vec } from './geometry.js';
 import { parseNumber, parseTime, solveAvoidance, solveTarget } from './solve.js';
 
 const RANGES = [1.5, 3, 6, 12, 24, 48, 96];
+const SPEED_SCALES = [1, 2, 4, 5, 10, 20]; // knots per mile of the sheet
 
 /**
  * @param {{own: {course: string, speed: string},
@@ -66,7 +67,41 @@ export function chooseRange(model, choice) {
  * sheet stands for. The smallest round figure that keeps every vector on the sheet.
  */
 export function chooseSpeedScale(model, range) {
+  return SPEED_SCALES.find((knots) => fastestSpeed(model) / knots <= range) ?? 50;
+}
+
+function fastestSpeed(model) {
   const speeds = [model.own?.speed ?? 0, ...model.targets.filter((t) => t.sol.ok).map((t) => t.sol.true.speed)];
-  const fastest = Math.max(0, ...speeds);
-  return [1, 2, 4, 5, 10, 20].find((knots) => fastest / knots <= range) ?? 50;
+  return Math.max(0, ...speeds);
+}
+
+/**
+ * Sheet range and speed-vector scale together.
+ *
+ * Positions and speed vectors share the sheet but not the scale: positions use the range,
+ * vectors use "one mile of the sheet = so many knots". With a scale chosen by the user
+ * and the range left to "auto", the range grows until the vectors fit as well; with the
+ * scale on "auto", the range follows the plots and the scale is made to fit that range.
+ *
+ * @param {'auto' | string} rangeChoice
+ * @param {'distance' | 'speed'} method
+ * @param {'auto' | string} scaleChoice knots per mile, or "auto"
+ */
+export function chooseScales(model, rangeChoice, method, scaleChoice) {
+  const fixed = scaleChoice === 'auto' ? null : Number(scaleChoice);
+  let range;
+  if (rangeChoice !== 'auto') {
+    range = Number(rangeChoice);
+  } else {
+    let need = Math.max(0, ...model.targets.map((t) => t.farthest));
+    if (method === 'speed' && fixed) need = Math.max(need, fastestSpeed(model) / fixed);
+    range = need ? RANGES.find((r) => r >= need - 1e-9) ?? RANGES[RANGES.length - 1] : 12;
+  }
+  return { range, knotsPerMile: fixed ?? chooseSpeedScale(model, range) };
+}
+
+/** "1 時間ぶん", "30 分ぶん"…: the run that a speed vector stands for at this scale. */
+export function scaleTimeBase(knotsPerMile) {
+  const minutes = 60 / knotsPerMile;
+  return minutes >= 60 ? `${minutes / 60} 時間ぶん` : `${Math.round(minutes * 10) / 10} 分ぶん`;
 }

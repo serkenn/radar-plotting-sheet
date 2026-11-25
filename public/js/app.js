@@ -2,7 +2,7 @@
 
 import { fmtAngle, fmtAspect, fmtBearing, fmtNum, fmtTurn, roman } from './format.js';
 import { bearingOf, len } from './geometry.js';
-import { buildModel, chooseRange, chooseSpeedScale } from './model.js';
+import { buildModel, chooseScales, scaleTimeBase } from './model.js';
 import { PRESETS, emptyTarget } from './presets.js';
 import { buildPrintPages } from './print.js';
 import { STEPS, fitView, fullView, renderSheet, trianglePoints } from './render.js';
@@ -11,6 +11,7 @@ import { formatTime, toHalfWidth } from './solve.js';
 const MAX_TARGETS = 3;
 const MAX_OBS = 4;
 const RANGE_CHOICES = ['auto', '3', '6', '12', '24', '48'];
+const SCALE_CHOICES = ['auto', '1', '2', '4', '5', '10'];
 const LAST_STEP = STEPS.length - 1;
 const AVOID_STEP = STEPS.indexOf('avoid');
 const MAX_ZOOM = 150;
@@ -100,6 +101,7 @@ const state = {
   range: 'auto',
   step: LAST_STEP,
   method: 'distance',
+  speedScale: 'auto',
 };
 const printOptions = { content: 'report', steps: 'all' };
 const zoom = { factor: 1, cx: 0, cy: 0 };
@@ -164,6 +166,7 @@ function encodeState() {
   if (state.active) params.set('k', String(state.active));
   if (state.step !== LAST_STEP) params.set('s', String(state.step));
   if (state.method === 'speed') params.set('v', '1');
+  if (state.speedScale !== 'auto') params.set('vs', state.speedScale);
   return params.toString();
 }
 
@@ -208,6 +211,7 @@ function decodeState(hash) {
   state.range = RANGE_CHOICES.includes(params.get('r')) ? params.get('r') : 'auto';
   state.step = int(params.get('s'), 0, LAST_STEP, LAST_STEP);
   state.method = params.get('v') === '1' ? 'speed' : 'distance';
+  state.speedScale = SCALE_CHOICES.includes(params.get('vs')) ? params.get('vs') : 'auto';
   resetZoom();
   return true;
 }
@@ -326,7 +330,7 @@ function resultRows(target) {
     rows.push(
       row(
         '速力ベクトルの縮尺',
-        `1 海里の目盛り ＝ ${speedScale} ノット<small>自船 ${fmtNum(sol.own.speed)} ノットの矢印は ${fmtNum(sol.own.speed / speedScale, 2)} 海里の長さ</small>`,
+        `<b>1 海里の目盛り ＝ ${speedScale} ノット</b><small>矢印は ${scaleTimeBase(speedScale)}の距離。自船 ${fmtNum(sol.own.speed)} ノットは ${fmtNum(sol.own.speed / speedScale, 2)} 海里の長さ</small>`,
       ),
     );
   }
@@ -450,6 +454,7 @@ function syncDependentControls() {
   avoidFields.classList.toggle('off', !avoid.on);
   for (const control of avoidFields.querySelectorAll('input, select')) control.disabled = !avoid.on;
   sideField.hidden = avoid.mode !== 'cpa';
+  $('scale-field').hidden = state.method !== 'speed';
 }
 
 function rebuildForm() {
@@ -472,7 +477,12 @@ function renderSteps() {
   }).join('');
   const avoid = activeTarget().avoid;
   let text = STEP_INFO[state.step].text;
-  if (state.step === STEPS.indexOf('triangle')) text = TRIANGLE_TEXT[state.method];
+  if (state.step === STEPS.indexOf('triangle')) {
+    text = TRIANGLE_TEXT[state.method];
+    if (state.method === 'speed') {
+      text += `矢印の長さは「1 海里の目盛り＝${speedScale} ノット」で取っています（用紙の上側の軸に kn の目盛りがあります）。`;
+    }
+  }
   if (state.step === AVOID_STEP) text = avoid.on ? AVOID_TEXT[state.method][avoid.mode] : AVOID_TEXT.off;
   stepText.textContent = `${state.step + 1}. ${STEP_INFO[state.step].title}：${text}`;
   $('step-prev').disabled = state.step <= 0;
@@ -483,8 +493,7 @@ function renderSteps() {
 
 function refresh() {
   model = buildModel(state);
-  currentRange = chooseRange(model, state.range);
-  speedScale = chooseSpeedScale(model, currentRange);
+  ({ range: currentRange, knotsPerMile: speedScale } = chooseScales(model, state.range, state.method, state.speedScale));
   renderSteps();
   renderResults();
   draw();
@@ -641,7 +650,7 @@ function bindForm() {
     if (!path) return;
     const [node, key] = resolve(path);
     node[key] = control.type === 'checkbox' ? control.checked : control.value;
-    if (path === 'range' || path === 'method') resetZoom();
+    if (path === 'range' || path === 'method' || path === 'speedScale') resetZoom();
     if (path === 'method') {
       try {
         localStorage.setItem(METHOD_KEY, state.method);

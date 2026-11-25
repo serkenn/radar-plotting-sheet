@@ -252,7 +252,7 @@ function textWidth(label, size) {
   return ems * size;
 }
 
-function drawSheet(pen, range, detail) {
+function drawSheet(pen, range, detail, knots = null) {
   const [cx, cy] = pen.xy(ORIGIN);
   const radius = pen.px(range);
   const minor = range / 12;
@@ -292,10 +292,21 @@ function drawSheet(pen, range, detail) {
     }
   }
 
-  // Distance figures on the solid rings, just right of the southern axis.
+  // Distance figures on the solid rings, just right of the southern axis. Speed vectors
+  // have their own scale: when they are drawn, the same rings are figured in knots on
+  // the northern axis (and only in knots where the triangle is shown alone).
   for (let i = 2; i <= 12; i += 2) {
-    const [x, y] = pen.xy(vec(180, i * minor));
-    pen.raw(`<text class="range-label" x="${r1(x + 3)}" y="${r1(y - 3)}">${fmtRange(i * minor)}</text>`);
+    if (!(detail && knots)) {
+      const [x, y] = pen.xy(vec(180, i * minor));
+      pen.raw(`<text class="range-label" x="${r1(x + 3)}" y="${r1(y - 3)}">${fmtRange(i * minor)}</text>`);
+    }
+    if (knots) {
+      const [x, y] = pen.xy(vec(0, i * minor));
+      const label = `${fmtRange(i * minor * knots)}kn`;
+      pen.raw(`<text class="range-label knots" x="${r1(x - 3)}" y="${r1(y + 11)}" text-anchor="end">${label}</text>`);
+      // other labels keep clear of the scale figures
+      pen.boxes.push([x - 5 - textWidth(label, 9.5), y + 1, x - 1, y + 14]);
+    }
   }
   pen.raw(
     `<path class="centre-mark" d="M${r1(cx - 6)} ${r1(cy)}H${r1(cx + 6)}M${r1(cx)} ${r1(cy - 6)}V${r1(cy + 6)}"/>`,
@@ -587,10 +598,11 @@ function drawTarget(pen, target, scene) {
  */
 export function renderSheet(view, scene) {
   const pen = new Pen(view);
-  drawSheet(pen, scene.range, scene.detail);
-  if (scene.blank) return pen.toString();
-
   const full = { method: 'distance', knotsPerMile: 1, ...scene };
+  const vectorsShown = !full.blank && full.method === 'speed' && full.step >= STEPS.indexOf('triangle');
+  drawSheet(pen, full.range, full.detail, vectorsShown ? full.knotsPerMile : null);
+  if (full.blank) return pen.toString();
+
   if (full.own) drawOwnShip(pen, full.own, full.range);
   for (const p of full.loose) pen.dot(p, 'ink');
 

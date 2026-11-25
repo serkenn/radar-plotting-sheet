@@ -84,3 +84,11 @@ test('slowing down in the speed-vector method', () => {
   assert.ok(seen.includes('新速力 7.7kn'));
   assert.ok(!seen.includes('新針路'));
 });
+
+test('rings are figured in knots while speed vectors are on the sheet', () => {
+  const withVectors = visible(draw('crossing', 'speed'));
+  // 12 mile sheet at one mile = two knots: the outer ring reads 24 kn, the 6 mile ring 12 kn
+  for (const label of ['4kn', '12kn', '24kn']) assert.ok(withVectors.includes(`\n${label}\n`), label);
+  assert.ok(!visible(draw('crossing', 'speed', STEPS.indexOf('cpa'))).includes('kn\n'), 'no knots before the triangle');
+  assert.ok(!visible(draw('crossing', 'distance')).includes('24kn'), 'no knots in the distance-vector method');
+});

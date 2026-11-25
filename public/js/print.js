@@ -3,6 +3,7 @@
 
 import { fmtAngle, fmtAspect, fmtBearing, fmtNum, fmtTurn, roman } from './format.js';
 import { STEPS, fitView, fullView, renderScaleBar, renderSheet, trianglePoints } from './render.js';
+import { scaleTimeBase } from './model.js';
 import { formatTime } from './solve.js';
 
 const SHEET = 720; // viewBox units; the sheet is printed 182 mm wide
@@ -146,7 +147,7 @@ function resultBox(kind, ctx) {
   if (anyAvoid) rows.push(['避航<small>新針路・新速力</small>', 'avoid', (s, target) => avoidResult(target, multi)]);
   const scaleNote =
     report && ctx.method === 'speed' && step >= TRIANGLE_STEP
-      ? `<p class="condition">速力ベクトルの縮尺：1 海里の目盛り ＝ ${fmtPlain(ctx.knotsPerMile)} ノット</p>`
+      ? `<p class="condition">速力の矢印：1 海里の目盛り ＝ ${fmtPlain(ctx.knotsPerMile)} ノット（${scaleTimeBase(ctx.knotsPerMile)}の距離）。用紙の上側の軸に kn の目盛り</p>`
       : '';
 
   const cell = (target, stepName, fill) => {
@@ -211,12 +212,13 @@ function page(kind, ctx) {
         }
       : { range, step: 0, own: null, targets: [], loose: [], blank: true };
   const tag = { report: 'レポート', problem: '問題用紙', blank: '' }[kind];
+  const vectors = kind === 'report' && ctx.method === 'speed' && step >= TRIANGLE_STEP;
 
   return (
     `<section class="page page-${kind}">` +
     `<div class="page-sheet">${sheetSvg(scene, range)}</div>` +
     '<div class="page-side">' +
-    `<header class="page-head"><h2>レーダー・プロッティング用紙</h2><p>${tag ? `<span class="page-kind">${tag}</span>` : ''}<span>レンジ ${fmtPlain(range)} 海里</span></p></header>` +
+    `<header class="page-head"><h2>レーダー・プロッティング用紙</h2><p>${tag ? `<span class="page-kind">${tag}</span>` : ''}<span>レンジ ${fmtPlain(range)} 海里${vectors ? `　速力の矢印 1 海里＝${fmtPlain(ctx.knotsPerMile)} ノット` : ''}</span></p></header>` +
     givenBox(kind, ctx) +
     resultBox(kind, ctx) +
     detailBox(kind, ctx, scene) +
