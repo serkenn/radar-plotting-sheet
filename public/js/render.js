@@ -20,8 +20,13 @@ export function fullView(width, height, range) {
   return { w: width, h: height, cx: 0, cy: 0, ppm: Math.max(0.5, (Math.min(width, height) / 2 - pad) / range) };
 }
 
-/** View that fits the given points with some room for labels. */
+/**
+ * View that fits the given points with some room for labels.
+ * @param {number | {x: number, y: number}} pad room in pixels; labels are wide, so the sides may get more
+ */
 export function fitView(width, height, points, pad = 58) {
+  const padX = typeof pad === 'number' ? pad : pad.x;
+  const padY = typeof pad === 'number' ? pad : pad.y;
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
@@ -34,12 +39,26 @@ export function fitView(width, height, points, pad = 58) {
   }
   const spanX = Math.max(maxX - minX, 1e-3);
   const spanY = Math.max(maxY - minY, 1e-3);
-  const ppm = Math.min((width - 2 * pad) / spanX, (height - 2 * pad) / spanY);
+  const ppm = Math.min((width - 2 * padX) / spanX, (height - 2 * padY) / spanY);
   return { w: width, h: height, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, ppm: Math.max(0.5, Math.min(ppm, 4000)) };
 }
 
-/** Points occupied by the speed triangle and, when present, the avoidance construction on it. */
-export function trianglePoints(sol, avoid) {
+/**
+ * Points occupied by the speed triangle and, when present, the avoidance construction on it.
+ * @param {'distance' | 'speed'} method where the triangle is drawn (at the first plot, or at the centre)
+ * @param {number} knotsPerMile scale of the speed vectors (speed method only)
+ */
+export function trianglePoints(sol, avoid, method = 'distance', knotsPerMile = 1) {
+  if (method === 'speed') {
+    const radius = sol.own.speed / knotsPerMile;
+    const points = [ORIGIN, scale(sol.own.vel, 1 / knotsPerMile), scale(sol.true.vel, 1 / knotsPerMile)];
+    if (avoid?.ok) {
+      for (const s of avoid.courses) points.push(vec(s.course, radius));
+      // a far-fetched speed would shrink everything else, so it is capped for the view
+      if (avoid.speed) points.push(vec(sol.own.course, Math.min(avoid.speed.speed, sol.own.speed * 2.5) / knotsPerMile));
+    }
+    return points;
+  }
   const points = [sol.e, sol.first.p, sol.last.p];
   if (avoid?.ok) {
     const { centre, radius } = avoid.circle;
@@ -50,10 +69,25 @@ export function trianglePoints(sol, avoid) {
   return points;
 }
 
+// Where else to try a label when its first place is taken: [turn in degrees, extra gap in pixels].
+const LABEL_TRIES = [
+  [30, 0],
+  [-30, 0],
+  [60, 2],
+  [-60, 2],
+  [0, 12],
+  [95, 4],
+  [-95, 4],
+  [30, 12],
+  [-30, 12],
+  [180, 0],
+];
+
 class Pen {
   constructor(view) {
     this.view = view;
     this.parts = [];
+    this.boxes = []; // rectangles already taken by labels
   }
 
   xy(p) {
@@ -120,15 +154,52 @@ class Pen {
     this.raw(`<circle class="ln hollow ${cls}" cx="${r1(x)}" cy="${r1(y)}" r="${radius}"/>`);
   }
 
-  /** Label placed `gap` pixels from p in the direction of `bearing`. */
+  /**
+   * Label placed `gap` pixels from p in the direction of `bearing`. It is kept inside the
+   * picture, and moved round its point when the place is already taken by another label.
+   */
   text(p, label, cls, bearing = 0, gap = 9) {
+    const { w, h } = this.view;
     const [x0, y0] = this.xy(p);
-    const dx = Math.sin(bearing * DEG) * gap;
-    const dy = -Math.cos(bearing * DEG) * gap;
-    const anchor = dx > 2.5 ? 'start' : dx < -2.5 ? 'end' : 'middle';
-    const baseline = dy > 2.5 ? 'hanging' : dy < -2.5 ? 'auto' : 'central';
+    const size = cls.includes('big') ? 14 : cls.includes('small') ? 10.5 : 12;
+    const width = textWidth(label, size);
+    const onScreen = x0 >= 0 && x0 <= w && y0 >= 0 && y0 <= h;
+    const edge = 4;
+
+    const layout = (turn, extra) => {
+      const direction = (bearing + turn) * DEG;
+      const dx = Math.sin(direction) * (gap + extra);
+      const dy = -Math.cos(direction) * (gap + extra);
+      const anchor = Math.abs(dx) <= Math.abs(dy) * 0.6 ? 'middle' : dx > 0 ? 'start' : 'end';
+      const baseline = Math.abs(dy) <= Math.abs(dx) * 0.6 ? 'central' : dy > 0 ? 'hanging' : 'auto';
+      const above = baseline === 'auto' ? size : baseline === 'central' ? size / 2 : 0;
+      let x = x0 + dx;
+      let y = y0 + dy;
+      let left = anchor === 'start' ? x : anchor === 'end' ? x - width : x - width / 2;
+      if (onScreen) {
+        // nudged back in rather than cut off at the edge
+        const shift = left < edge ? edge - left : left + width > w - edge ? w - edge - (left + width) : 0;
+        x += shift;
+        left += shift;
+        y = Math.max(edge + above, Math.min(h - edge - (size - above), y));
+      }
+      return { x, y, anchor, baseline, box: [left - 2, y - above - 1, left + width + 2, y - above + size + 1] };
+    };
+    const taken = (box) => this.boxes.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]);
+
+    let place = layout(0, 0);
+    if (onScreen && taken(place.box)) {
+      for (const [turn, extra] of LABEL_TRIES) {
+        const other = layout(turn, extra);
+        if (!taken(other.box)) {
+          place = other;
+          break;
+        }
+      }
+    }
+    this.boxes.push(place.box);
     this.raw(
-      `<text class="lbl ${cls}" x="${r1(x0 + dx)}" y="${r1(y0 + dy)}" text-anchor="${anchor}" dominant-baseline="${baseline}">${esc(label)}</text>`,
+      `<text class="lbl ${cls}" x="${r1(place.x)}" y="${r1(place.y)}" text-anchor="${place.anchor}" dominant-baseline="${place.baseline}">${esc(label)}</text>`,
     );
   }
 
@@ -142,12 +213,44 @@ class Pen {
     this.raw(`<path class="ln ${cls}" d="M${r1(x1)} ${r1(y1)}A${radius} ${radius} 0 0 ${sweep} ${r1(x2)} ${r1(y2)}"/>`);
   }
 
+  /**
+   * Small arrow-shaped marks on the line from a to b. Lines that carry the same number
+   * of marks are parallel: this is how a line and its transferred copy are tied together.
+   */
+  chevrons(a, b, count, cls, where = 0.5) {
+    const [x1, y1] = this.xy(a);
+    const [x2, y2] = this.xy(b);
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const d = Math.hypot(dx, dy);
+    if (d < 34) return;
+    const ux = dx / d;
+    const uy = dy / d;
+    for (let i = 0; i < count; i += 1) {
+      const along = d * where + (i - (count - 1) / 2) * 6.5;
+      const tipX = x1 + ux * (along + 3.5);
+      const tipY = y1 + uy * (along + 3.5);
+      const baseX = x1 + ux * (along - 3.5);
+      const baseY = y1 + uy * (along - 3.5);
+      this.raw(
+        `<path class="ln thin ${cls}" d="M${r1(baseX - uy * 5)} ${r1(baseY + ux * 5)}L${r1(tipX)} ${r1(tipY)}L${r1(baseX + uy * 5)} ${r1(baseY - ux * 5)}"/>`,
+      );
+    }
+  }
+
   toString() {
     return this.parts.join('');
   }
 }
 
 const fmtRange = (value) => String(Math.round(value * 100) / 100);
+
+/** Rough width of a label in pixels: full-width characters take a whole em, others about 0.6 em. */
+function textWidth(label, size) {
+  let ems = 0;
+  for (const ch of label) ems += ch.codePointAt(0) > 0x2e7f ? 1 : 0.6;
+  return ems * size;
+}
 
 function drawSheet(pen, range, detail) {
   const [cx, cy] = pen.xy(ORIGIN);
@@ -225,91 +328,194 @@ function drawOwnShip(pen, own, range) {
   pen.text(vec(own.course, range * 0.9), `自船 ${fmtBearing(own.course)}`, 'own small', own.course + 90, 7);
 }
 
-function drawTarget(pen, target, scene) {
+/** Distance-vector method: the triangle e–M1–M(last), drawn where the target was plotted. */
+function drawDistanceTriangle(pen, target, scene, avoidShown) {
   const { sol, avoid, active } = target;
-  const at = (name) => scene.step >= STEPS.indexOf(name);
-  const moving = sol.rel.moving;
-  const relBearing = moving ? bearingOf(sol.disp) : 0;
-
-  // Labels of the plotted points go on the side of the relative motion line away from e.
-  const leftOfLine = vec(relBearing - 90, 1);
-  const plotSide = dot(leftOfLine, sub(mid(sol.first.p, sol.last.p), sol.e)) >= 0 ? relBearing - 90 : relBearing + 90;
   const centroid = scale(add(add(sol.e, sol.first.p), sol.last.p), 1 / 3);
   const outward = (p) => {
     const d = sub(p, centroid);
-    return len(d) < 1e-9 ? plotSide : bearingOf(d);
+    return len(d) < 1e-9 ? 0 : bearingOf(d);
   };
-  const triangleSize = pen.px(Math.max(len(sol.own.disp), len(sol.true.disp), len(sol.disp)));
   // Vector labels need room; on the full sheet they are left to the enlarged view.
-  const roomy = active && triangleSize >= 150;
+  const roomy = active && pen.px(Math.max(len(sol.own.disp), len(sol.true.disp), len(sol.disp))) >= 150;
+
+  pen.arrow(sol.e, sol.first.p, 'own');
+  if (sol.true.course !== null) pen.arrow(sol.e, sol.last.p, 'tgt');
+  pen.dot(sol.e, 'ink', 2.6);
+  if (active) pen.text(sol.e, 'e', 'ink', outward(sol.e), 9);
+  if (roomy) {
+    const ownMid = mid(sol.e, sol.first.p);
+    pen.text(ownMid, `自船 ${fmtBearing(sol.own.course)}・${fmtNum(sol.own.speed)}kn`, 'own', outward(ownMid), 9);
+    if (sol.true.course !== null) {
+      const tgtAt = add(sol.e, scale(sub(sol.last.p, sol.e), 0.3));
+      pen.text(tgtAt, `他船 ${fmtBearing(sol.true.course)}・${fmtNum(sol.true.speed)}kn`, 'tgt', outward(tgtAt), 9);
+    }
+  }
+  if (!avoidShown) return;
+
+  // The line through the last plot, parallel to the new relative motion, drawn
+  // backwards; it meets the own-ship circle (new courses) and the own-ship side (new speed).
+  const back = scale(avoid.dir, -1);
+  const marks = [...avoid.courses.map((s) => s.point), ...(avoid.speed ? [avoid.speed.point] : [])];
+  const reaches = marks.map((p) => dot(sub(p, avoid.through), back));
+  const reach = Math.max(len(sub(sol.e, avoid.through)), ...reaches) + avoid.circle.radius * 0.45;
+  pen.line(avoid.through, add(avoid.through, scale(back, reach)), 'avoid thin dash');
+  if (avoid.mode === 'cpa') pen.circle(avoid.circle.centre, avoid.circle.radius, 'own thin dots');
+
+  avoid.courses.forEach((s) => {
+    pen.arrow(sol.e, s.point, 'own dash', 8);
+    pen.dot(s.point, 'avoid', 3.2);
+    if (roomy) pen.text(s.point, `新針路 ${fmtBearing(s.course)}`, 'avoid', outward(s.point), 10);
+  });
+  if (avoid.speed) {
+    pen.ring(avoid.speed.point, 'avoid', 3.6);
+    if (roomy) {
+      const lastIsLeft = dot(vec(sol.own.course - 90, 1), sub(sol.last.p, sol.e)) > 0;
+      pen.text(avoid.speed.point, `新速力 ${fmtNum(avoid.speed.speed)}kn`, 'avoid', sol.own.course + (lastIsLeft ? 90 : -90), 10);
+    }
+  }
+}
+
+/**
+ * Speed-vector method: own ship and target vectors start at the centre, and the relative
+ * motion is transferred (moved parallel to itself) so that it joins their tips.
+ */
+function drawSpeedTriangle(pen, target, scene, avoidShown) {
+  const { sol, avoid, active } = target;
+  const k = scene.knotsPerMile;
+  const own = scale(sol.own.vel, 1 / k);
+  const tgt = scale(sol.true.vel, 1 / k);
+  const centroid = scale(add(own, tgt), 1 / 3);
+  const outward = (p) => {
+    const d = sub(p, centroid);
+    return len(d) < 1e-9 ? 0 : bearingOf(d);
+  };
+  const size = pen.px(Math.max(len(own), len(tgt), len(sub(tgt, own))));
+  const roomy = active && (scene.detail ? size >= 120 : size >= 170 && pen.px(scene.range) >= 240);
+
+  if (active && sol.own.speed > 0) pen.arrow(ORIGIN, own, 'own bold');
+  if (sol.true.course !== null) pen.arrow(ORIGIN, tgt, 'tgt bold');
+  if (sol.rel.moving) {
+    pen.arrow(own, tgt, 'rel');
+    // one mark on the plotted line and one on its transferred copy
+    pen.chevrons(own, tgt, 1, 'rel');
+    if (!scene.detail) pen.chevrons(sol.first.p, sol.last.p, 1, 'rel');
+  }
+  if (roomy) {
+    if (sol.own.speed > 0) {
+      const ownAt = scale(own, 0.74);
+      pen.text(ownAt, `自船 ${fmtBearing(sol.own.course)}・${fmtNum(sol.own.speed)}kn`, 'own', outward(ownAt), 10);
+    }
+    if (sol.true.course !== null) {
+      const tgtAt = scale(tgt, 0.6);
+      pen.text(tgtAt, `他船 ${fmtBearing(sol.true.course)}・${fmtNum(sol.true.speed)}kn`, 'tgt', outward(tgtAt), 10);
+    }
+    if (sol.rel.moving) {
+      const relMid = mid(own, tgt);
+      pen.text(relMid, `相対（転移）${fmtBearing(sol.rel.course)}・${fmtNum(sol.rel.speed)}kn`, 'rel', outward(relMid), 13);
+    }
+  }
+  if (!avoidShown) return;
+
+  // The new relative motion, transferred to the tip of the target vector and drawn
+  // backwards: the new own-ship vector must end on this line.
+  const radius = sol.own.speed / k;
+  const back = scale(avoid.dir, -1);
+  const tips = avoid.courses.map((s) => ({ course: s.course, p: vec(s.course, radius) }));
+  const speedTip = avoid.speed ? vec(sol.own.course, avoid.speed.speed / k) : null;
+  const marks = [...tips.map((tip) => tip.p), ...(speedTip ? [speedTip] : [])];
+  const furthest = Math.max(len(sub(own, tgt)), ...marks.map((p) => dot(sub(p, tgt), back)));
+  const reach = Math.min(scene.range * 2.5, furthest + scene.range * 0.15);
+  const far = add(tgt, scale(back, reach));
+  pen.line(tgt, far, 'avoid thin dash');
+  pen.chevrons(tgt, far, 2, 'avoid', 0.42);
+
+  // course only: the tip stays on the circle of own speed
+  if (avoid.mode === 'cpa') pen.circle(ORIGIN, radius, 'own thin dots');
+  for (const tip of tips) {
+    pen.arrow(ORIGIN, tip.p, 'own dash', 8);
+    pen.dot(tip.p, 'avoid', 3.4);
+    if (roomy) pen.text(tip.p, `新針路 ${fmtBearing(tip.course)}`, 'avoid', bearingOf(tip.p), 10);
+  }
+  // speed only: the tip stays on the own course line
+  if (speedTip) {
+    if (avoid.speed.speed > sol.own.speed) pen.line(own, speedTip, 'own thin dash');
+    pen.ring(speedTip, 'avoid', 4);
+    if (roomy) {
+      const targetOnLeft = dot(vec(sol.own.course - 90, 1), tgt) > 0;
+      pen.text(speedTip, `新速力 ${fmtNum(avoid.speed.speed)}kn`, 'avoid', sol.own.course + (targetOnLeft ? 90 : -90), 10);
+    }
+  }
+  if (roomy) {
+    const at = add(tgt, scale(back, reach * 0.3));
+    const side = bearingOf(back) + (dot(vec(bearingOf(back) - 90, 1), at) >= 0 ? -90 : 90);
+    pen.text(at, '新しい相対（転移）', 'avoid small', side, 12);
+  }
+}
+
+function drawTarget(pen, target, scene) {
+  const { sol, avoid, active } = target;
+  const at = (name) => scene.step >= STEPS.indexOf(name);
+  const speedMethod = scene.method === 'speed';
+  // The enlarged view of the speed-vector triangle shows that triangle alone.
+  const triangleOnly = Boolean(scene.detail) && speedMethod;
+  const moving = sol.rel.moving;
+  const relBearing = moving ? bearingOf(sol.disp) : 0;
+
+  // Labels of the plotted points go on the side of the relative motion line away from
+  // the triangle: away from e, or away from the centre in the speed-vector method.
+  const leftOfLine = vec(relBearing - 90, 1);
+  const awayFrom = speedMethod ? ORIGIN : sol.e;
+  const plotSide = dot(leftOfLine, sub(mid(sol.first.p, sol.last.p), awayFrom)) >= 0 ? relBearing - 90 : relBearing + 90;
   // With the plots close together on screen, labels are cut down to the essentials.
   const spacing = pen.px(len(sol.disp)) / (sol.obs.length - 1);
   const compact = spacing < 50;
   const avoidShown = at('avoid') && active && Boolean(avoid?.ok);
 
-  // 1. Plot
-  sol.obs.forEach((o, i) => {
-    pen.dot(o.p, 'ink');
-    // Neighbouring labels alternate between two rows so that they do not run into each other.
-    const gap = spacing < 96 && i % 2 === 1 ? 23 : 9;
-    if (active) pen.text(o.p, compact ? `M${i + 1}` : `M${i + 1} ${formatTime(o.time)}`, 'ink', plotSide, gap);
-  });
-  if (scene.multi && !active) pen.text(sol.first.p, roman(target.index), 'ink tag', relBearing + 180, 13);
+  if (!triangleOnly) {
+    // 1. Plot
+    sol.obs.forEach((o, i) => {
+      pen.dot(o.p, 'ink');
+      // Neighbouring labels alternate between two rows so that they do not run into each other.
+      const gap = spacing < 96 && i % 2 === 1 ? 23 : 9;
+      if (active) pen.text(o.p, compact ? `M${i + 1}` : `M${i + 1} ${formatTime(o.time)}`, 'ink', plotSide, gap);
+    });
+    if (scene.multi && !active) pen.text(sol.first.p, roman(target.index), 'ink tag', relBearing + 180, 13);
 
-  // 2. Relative motion line
-  if (at('relative') && moving) {
-    pen.arrow(sol.first.p, sol.last.p, 'rel bold');
-    const ahead = lineCircle(sol.last.p, sol.disp, ORIGIN, scene.range).filter((hit) => hit.s > 0);
-    if (ahead.length) pen.line(sol.last.p, ahead[ahead.length - 1].point, 'rel dash');
-    if (sol.cpa.tcpaMin < -sol.dtMin) pen.line(sol.first.p, sol.cpa.point, 'rel dash');
-    if (roomy) {
-      pen.text(
-        mid(sol.first.p, sol.last.p),
-        `相対 ${fmtBearing(sol.rel.course)}・${fmtNum(sol.rel.speed)}kn`,
-        'rel',
-        plotSide,
-        25,
-      );
+    // 2. Relative motion line
+    if (at('relative') && moving) {
+      pen.arrow(sol.first.p, sol.last.p, 'rel bold');
+      const ahead = lineCircle(sol.last.p, sol.disp, ORIGIN, scene.range).filter((hit) => hit.s > 0);
+      if (ahead.length) pen.line(sol.last.p, ahead[ahead.length - 1].point, 'rel dash');
+      if (sol.cpa.tcpaMin < -sol.dtMin) pen.line(sol.first.p, sol.cpa.point, 'rel dash');
+      if (active && pen.px(len(sol.disp)) >= 150) {
+        pen.text(mid(sol.first.p, sol.last.p), `相対 ${fmtBearing(sol.rel.course)}・${fmtNum(sol.rel.speed)}kn`, 'rel', plotSide, 25);
+      }
     }
-  }
 
-  // 3. CPA
-  if (at('cpa') && sol.cpa) {
-    const c = sol.cpa;
-    const out = c.bearing ?? relBearing + 90;
-    if (pen.px(c.dcpa) > 2) {
-      pen.line(ORIGIN, c.point, 'cpa');
-      // right-angle mark between the perpendicular and the relative motion line
-      const a = pen.shift(c.point, out + 180, 7);
-      const b = pen.shift(c.point, relBearing + 180, 7);
-      const corner = pen.shift(a, relBearing + 180, 7);
-      pen.line(a, corner, 'cpa thin');
-      pen.line(corner, b, 'cpa thin');
-    }
-    pen.dot(c.point, 'cpa', 3.6);
-    if (active) {
-      const when = c.tcpaMin >= 0 ? formatTime(c.time) : '通過済み';
-      pen.text(c.point, compact || avoidShown ? 'CPA' : `CPA ${fmtNum(c.dcpa, 2)}海里・${when}`, 'cpa', out, 10);
-    }
-  }
-
-  // 4. Speed triangle
-  if (at('triangle')) {
-    pen.arrow(sol.e, sol.first.p, 'own');
-    if (sol.true.course !== null) pen.arrow(sol.e, sol.last.p, 'tgt');
-    pen.dot(sol.e, 'ink', 2.6);
-    if (active) pen.text(sol.e, 'e', 'ink', outward(sol.e), 9);
-    if (roomy) {
-      const ownMid = mid(sol.e, sol.first.p);
-      pen.text(ownMid, `自船 ${fmtBearing(sol.own.course)}・${fmtNum(sol.own.speed)}kn`, 'own', outward(ownMid), 9);
-      if (sol.true.course !== null) {
-        const tgtAt = add(sol.e, scale(sub(sol.last.p, sol.e), 0.3));
-        pen.text(tgtAt, `他船 ${fmtBearing(sol.true.course)}・${fmtNum(sol.true.speed)}kn`, 'tgt', outward(tgtAt), 9);
+    // 3. CPA
+    if (at('cpa') && sol.cpa) {
+      const c = sol.cpa;
+      const out = c.bearing ?? relBearing + 90;
+      if (pen.px(c.dcpa) > 2) {
+        pen.line(ORIGIN, c.point, 'cpa');
+        // right-angle mark between the perpendicular and the relative motion line
+        const a = pen.shift(c.point, out + 180, 7);
+        const b = pen.shift(c.point, relBearing + 180, 7);
+        const corner = pen.shift(a, relBearing + 180, 7);
+        pen.line(a, corner, 'cpa thin');
+        pen.line(corner, b, 'cpa thin');
+      }
+      pen.dot(c.point, 'cpa', 3.6);
+      if (active) {
+        const when = c.tcpaMin >= 0 ? formatTime(c.time) : '通過済み';
+        pen.text(c.point, compact || avoidShown ? 'CPA' : `CPA ${fmtNum(c.dcpa, 2)}海里・${when}`, 'cpa', out, 10);
       }
     }
   }
 
-  // 5. Aspect: the angle at the target between her heading and the line back to own ship
+  // 5. Aspect: the angle at the target between her heading and the line back to own ship.
+  // (Drawn before the triangle so that the triangle stays on top near the centre.)
   if (at('aspect') && sol.aspect && !scene.detail) {
     const m = sol.last.p;
     const a = sol.aspect;
@@ -335,11 +541,11 @@ function drawTarget(pen, target, scene) {
     }
   }
 
-  // 6. Manoeuvre that opens the CPA
-  if (avoidShown) {
+  // 6. Manoeuvre that opens the CPA: the new relative motion line on the sheet
+  if (avoidShown && !triangleOnly) {
     const ahead = lineCircle(avoid.m3, avoid.dir, ORIGIN, scene.range).filter((hit) => hit.s > 0);
     const exit = ahead.length ? ahead[ahead.length - 1].point : null;
-    const newBearing = avoid.relCourse;
+    const aim = avoid.mode === 'cpa' ? avoid.tangentPoint : avoid.pass;
 
     if (avoid.mode === 'cpa') {
       pen.circle(ORIGIN, avoid.distance, 'avoid thin dash');
@@ -357,56 +563,26 @@ function drawTarget(pen, target, scene) {
       const targetOnLeft = dot(vec(sol.own.course - 90, 1), avoid.m3) > 0;
       pen.text(avoid.pass, `船首方向 ${fmtRange(avoid.distance)}海里`, 'avoid', sol.own.course + (targetOnLeft ? 90 : -90), 10);
       pen.dot(avoid.newCpa.point, 'avoid', 3);
-      pen.text(avoid.newCpa.point, `DCPA ${fmtNum(avoid.newCpa.dcpa, 2)}海里`, 'avoid', avoid.newCpa.bearing ?? newBearing + 90, 10);
+      pen.text(avoid.newCpa.point, `DCPA ${fmtNum(avoid.newCpa.dcpa, 2)}海里`, 'avoid', avoid.newCpa.bearing ?? avoid.relCourse + 90, 10);
     }
+    // two marks on the new line and on its transferred copy in the speed-vector triangle
+    if (speedMethod) pen.chevrons(avoid.m3, aim, 2, 'avoid');
     pen.ring(avoid.m3, 'avoid');
     pen.text(avoid.m3, compact ? formatTime(avoid.time) : `動作開始 ${formatTime(avoid.time)}`, 'avoid', plotSide + 180, 11);
-
-    // On the speed triangle: the line through the last plot, parallel to the new
-    // relative motion, drawn backwards; it meets the own-ship circle and the own-ship side.
-    const back = scale(avoid.dir, -1);
-    const marks = [...avoid.courses.map((s) => s.point), ...(avoid.speed ? [avoid.speed.point] : [])];
-    const reaches = marks.map((p) => dot(sub(p, avoid.through), back));
-    const reach = Math.max(len(sub(sol.e, avoid.through)), ...reaches) + avoid.circle.radius * 0.45;
-    pen.line(avoid.through, add(avoid.through, scale(back, reach)), 'avoid thin dash');
-    if (avoid.mode === 'cpa') pen.circle(avoid.circle.centre, avoid.circle.radius, 'own thin dots');
-
-    avoid.courses.forEach((s) => {
-      pen.arrow(sol.e, s.point, 'own dash', 8);
-      pen.dot(s.point, 'avoid', 3.2);
-      if (roomy) pen.text(s.point, `新針路 ${fmtBearing(s.course)}`, 'avoid', outward(s.point), 10);
-    });
-    if (avoid.speed) {
-      pen.ring(avoid.speed.point, 'avoid', 3.6);
-      if (roomy) {
-        const lastIsLeft = dot(vec(sol.own.course - 90, 1), sub(sol.last.p, sol.e)) > 0;
-        pen.text(avoid.speed.point, `新速力 ${fmtNum(avoid.speed.speed)}kn`, 'avoid', sol.own.course + (lastIsLeft ? 90 : -90), 10);
-      }
-    }
   }
-}
 
-/** Speed-vector method: one-hour vectors drawn from the centre. */
-function drawSpeedVectors(pen, sol, range) {
-  const fastest = Math.max(sol.own.speed, sol.true.speed);
-  let knotsPerMile = 1;
-  for (const k of [1, 2, 4, 5, 10, 20]) {
-    knotsPerMile = k;
-    if (fastest / k <= range) break;
+  // 4. Speed triangle, with the avoidance construction on it when that step is shown
+  if (at('triangle')) {
+    if (speedMethod) drawSpeedTriangle(pen, target, scene, avoidShown);
+    else drawDistanceTriangle(pen, target, scene, avoidShown);
   }
-  const own = scale(sol.own.vel, 1 / knotsPerMile);
-  const tgt = scale(sol.true.vel, 1 / knotsPerMile);
-  pen.arrow(ORIGIN, own, 'own');
-  pen.arrow(ORIGIN, tgt, 'tgt');
-  pen.arrow(own, tgt, 'rel');
-  const away = bearingOf(sub(mid(own, tgt), ORIGIN));
-  pen.text(mid(own, tgt), `速力ベクトル方式（1海里＝${knotsPerMile}ノット）`, 'rel small', away, 10);
 }
 
 /**
  * @param {{w: number, h: number, cx: number, cy: number, ppm: number}} view
  * @param {{range: number, step: number, own: object | null, targets: object[], loose: object[],
- *   blank?: boolean, detail?: boolean, speedVector?: boolean, multi?: boolean}} scene
+ *   blank?: boolean, detail?: boolean, multi?: boolean,
+ *   method?: 'distance' | 'speed', knotsPerMile?: number}} scene
  * @returns {string} SVG markup for the inside of the <svg> element
  */
 export function renderSheet(view, scene) {
@@ -414,22 +590,18 @@ export function renderSheet(view, scene) {
   drawSheet(pen, scene.range, scene.detail);
   if (scene.blank) return pen.toString();
 
-  if (scene.own) drawOwnShip(pen, scene.own, scene.range);
-  for (const p of scene.loose) pen.dot(p, 'ink');
+  const full = { method: 'distance', knotsPerMile: 1, ...scene };
+  if (full.own) drawOwnShip(pen, full.own, full.range);
+  for (const p of full.loose) pen.dot(p, 'ink');
 
-  const solved = scene.targets.filter((t) => t.sol.ok);
+  const solved = full.targets.filter((t) => t.sol.ok);
   const background = solved.filter((t) => !t.active);
   if (background.length) {
     pen.raw('<g class="dim">');
-    background.forEach((t) => drawTarget(pen, t, scene));
+    background.forEach((t) => drawTarget(pen, t, full));
     pen.raw('</g>');
   }
   const front = solved.find((t) => t.active);
-  if (front) {
-    drawTarget(pen, front, scene);
-    if (scene.speedVector && scene.step >= STEPS.indexOf('triangle') && front.sol.true.course !== null) {
-      drawSpeedVectors(pen, front.sol, scene.range);
-    }
-  }
+  if (front) drawTarget(pen, front, full);
   return pen.toString();
 }

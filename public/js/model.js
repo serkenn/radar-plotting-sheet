@@ -60,3 +60,13 @@ export function chooseRange(model, choice) {
   if (!need) return 12;
   return RANGES.find((r) => r >= need - 1e-9) ?? RANGES[RANGES.length - 1];
 }
+
+/**
+ * Scale of the speed vectors drawn from the centre: how many knots one mile of the
+ * sheet stands for. The smallest round figure that keeps every vector on the sheet.
+ */
+export function chooseSpeedScale(model, range) {
+  const speeds = [model.own?.speed ?? 0, ...model.targets.filter((t) => t.sol.ok).map((t) => t.sol.true.speed)];
+  const fastest = Math.max(0, ...speeds);
+  return [1, 2, 4, 5, 10, 20].find((knots) => fastest / knots <= range) ?? 50;
+}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildModel, chooseRange } from '../public/js/model.js';
+import { buildModel, chooseRange, chooseSpeedScale } from '../public/js/model.js';
 import { PRESETS } from '../public/js/presets.js';
 import { PRINT_CONTENTS, buildPrintPages } from '../public/js/print.js';
 
@@ -80,4 +80,23 @@ test('a report up to an earlier step leaves the later answers empty', () => {
 test('several targets share one table', () => {
   const seen = visible(build('three-ships', 'report', 5, 1));
   for (const text of ['物標 Ⅰ', '物標 Ⅱ', '物標 Ⅲ', 'G31.5°', '速力三角形の拡大図（物標 Ⅱ）']) assert.ok(seen.includes(text), text);
+});
+
+test('the speed-vector method is carried into the printed report', () => {
+  const model = buildModel(preset('crossing'));
+  const range = chooseRange(model, 'auto');
+  const knotsPerMile = chooseSpeedScale(model, range);
+  assert.equal(knotsPerMile, 2, '23 knots on a 12 mile sheet needs one mile per two knots');
+  const seen = visible(buildPrintPages({ model, range, active: 0, step: 5, content: 'report', method: 'speed', knotsPerMile }));
+  for (const text of ['相対（転移）269.5°・30.1kn', '新しい相対（転移）', '新針路 097.5°', '新速力 3.6kn', '1 海里の目盛り ＝ 2 ノット', '速力三角形だけを抜き出した図']) {
+    assert.ok(seen.includes(text), text);
+  }
+});
+
+test('the speed scale keeps the fastest vector on the sheet', () => {
+  const slow = buildModel(preset('three-plots'));
+  assert.equal(chooseSpeedScale(slow, 12), 1);
+  const fast = buildModel(preset('three-ships'));
+  assert.equal(chooseSpeedScale(fast, 12), 4);
+  assert.equal(chooseSpeedScale(fast, 48), 1);
 });

@@ -110,6 +110,12 @@
 
         <fieldset>
           <legend>表示</legend>
+          <label>速力三角形の描き方
+            <select data-path="method">
+              <option value="distance">距離ベクトル方式（M1 の所に、観測の間に進む距離で描く）</option>
+              <option value="speed">速力ベクトル方式（中心から、速力の長さで大きく描く）</option>
+            </select>
+          </label>
           <div class="pair">
             <label>レンジ
               <select data-path="range">
@@ -122,7 +128,6 @@
               </select>
             </label>
           </div>
-          <label class="check"><input type="checkbox" data-path="speedVector"> 速力ベクトル方式（中心から1時間ぶんの矢印）も描く</label>
         </fieldset>
       </form>
     </section>
@@ -133,14 +138,14 @@
     </section>
 
     <section class="detail" aria-label="速力三角形の拡大図">
-      <h2>速力三角形の拡大図</h2>
+      <h2 id="detail-title">速力三角形の拡大図</h2>
       <div class="detail-frame" id="detail-frame">
         <svg id="detail" class="sheet static" role="img" aria-label="速力三角形の拡大図"></svg>
       </div>
       <ul class="legend">
-        <li><span class="swatch own"></span>自船（e→M1）</li>
-        <li><span class="swatch rel"></span>相対運動（M1→M2）</li>
-        <li><span class="swatch tgt"></span>他船の真の動き（e→M2）</li>
+        <li><span class="swatch own"></span>自船</li>
+        <li><span class="swatch rel"></span>相対運動</li>
+        <li><span class="swatch tgt"></span>他船の真の動き</li>
         <li><span class="swatch cpa"></span>CPA</li>
         <li><span class="swatch avoid"></span>避航</li>
       </ul>

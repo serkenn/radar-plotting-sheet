@@ -2,7 +2,7 @@
 
 import { fmtAngle, fmtAspect, fmtBearing, fmtNum, fmtTurn, roman } from './format.js';
 import { bearingOf, len } from './geometry.js';
-import { buildModel, chooseRange } from './model.js';
+import { buildModel, chooseRange, chooseSpeedScale } from './model.js';
 import { PRESETS, emptyTarget } from './presets.js';
 import { buildPrintPages } from './print.js';
 import { STEPS, fitView, fullView, renderSheet, trianglePoints } from './render.js';
@@ -15,6 +15,7 @@ const LAST_STEP = STEPS.length - 1;
 const AVOID_STEP = STEPS.indexOf('avoid');
 const MAX_ZOOM = 150;
 const PAGE_WIDTH_PX = (297 / 25.4) * 96; // A4 landscape at CSS resolution
+const METHOD_KEY = 'radar-plotting-sheet:method';
 
 const STEP_INFO = [
   {
@@ -29,10 +30,7 @@ const STEP_INFO = [
     title: 'CPA',
     text: '中心（自船）から相対運動線へ垂線を下ろします。足が最接近点（CPA）、垂線の長さが DCPA、そこまでにかかる時間が TCPA です。',
   },
-  {
-    title: '速力三角形',
-    text: 'M1 から自船の針路と反対向きに、観測の間に自船が進む距離を取って e とします。e→M1 が自船、e→最後の点が他船の真針路・真速力です。',
-  },
+  { title: '速力三角形', text: '' },
   {
     title: 'アスペクト',
     text: '他船の位置に立って、他船の船首方向と「自船が見える方向」の間の角を測ります。自船が見える方向は、観測した方位の反対（±180°）です。左舷が見えれば R（紅）、右舷が見えれば G（緑）。',
@@ -40,9 +38,22 @@ const STEP_INFO = [
   { title: '避航', text: '' },
 ];
 
+const TRIANGLE_TEXT = {
+  distance:
+    'M1 から自船の針路と反対向きに、観測の間に自船が進む距離を取って e とします。e→M1 が自船、e→最後の点が他船の真針路・真速力です（距離ベクトル方式）。',
+  speed:
+    '中心から自船の真針路の向きに、速力の長さの矢印を引きます。その先端へ相対運動線を平行に移し（転移）、相対速力の長さを取ります。中心からその先へ引いた矢印が、他船の真針路・真速力です（速力ベクトル方式）。',
+};
+
 const AVOID_TEXT = {
-  cpa: '動作を始める位置から、希望する CPA の円へ接線を引きます（新しい相対運動線）。それと平行な線を最後の観測点から逆向きに引き、e を中心に自船の航走距離を半径とする円との交点が新しい針路、元の自船の辺との交点が新しい速力です。',
-  bow: '動作を始める位置から、自船の船首線上の指定した距離の点へ線を引きます（新しい相対運動線）。それと平行な線を最後の観測点から逆向きに引き、元の自船の辺との交点までの長さが新しい速力です。',
+  distance: {
+    cpa: '動作を始める位置から、希望する CPA の円へ接線を引きます（新しい相対運動線）。それと平行な線を最後の観測点から逆向きに引き、e を中心に自船の航走距離を半径とする円との交点が新しい針路、元の自船の辺との交点が新しい速力です。',
+    bow: '動作を始める位置から、自船の船首線上の指定した距離の点へ線を引きます（新しい相対運動線）。それと平行な線を最後の観測点から逆向きに引き、元の自船の辺との交点までの長さが新しい速力です。',
+  },
+  speed: {
+    cpa: '動作を始める位置から、希望する CPA の円へ接線を引きます（新しい相対運動線）。その線を他船の矢印の先端へ平行に移し（転移）、逆向きに延ばします。新しい自船の矢印の先端は、必ずこの線の上に来ます。針路だけ変えるなら、中心から自船の速力を半径とする円との交点（新針路）。速力だけ変えるなら、元の自船の針路線との交点（中心からの長さが新速力）。',
+    bow: '動作を始める位置から、自船の船首線上の指定した距離の点へ線を引きます（新しい相対運動線）。その線を他船の矢印の先端へ平行に移し（転移）、逆向きに延ばします。元の自船の針路線との交点が新しい自船の矢印の先端で、中心からの長さが新速力です。',
+  },
   off: '「避航の作図をする」にチェックを入れると、CPA を大きくする変針・変速の作図を描きます。',
 };
 
@@ -88,12 +99,13 @@ const state = {
   active: 0,
   range: 'auto',
   step: LAST_STEP,
-  speedVector: false,
+  method: 'distance',
 };
 const printOptions = { content: 'report', steps: 'all' };
 const zoom = { factor: 1, cx: 0, cy: 0 };
 let model = null;
 let currentRange = 12;
+let speedScale = 1;
 
 // ---------------------------------------------------------------- state
 
@@ -106,7 +118,6 @@ function loadPreset(preset) {
   state.active = 0;
   state.range = 'auto';
   state.step = LAST_STEP;
-  state.speedVector = false;
   resetZoom();
 }
 
@@ -116,7 +127,6 @@ function clearAll() {
   state.active = 0;
   state.range = 'auto';
   state.step = LAST_STEP;
-  state.speedVector = false;
   resetZoom();
 }
 
@@ -153,7 +163,7 @@ function encodeState() {
   if (state.range !== 'auto') params.set('r', state.range);
   if (state.active) params.set('k', String(state.active));
   if (state.step !== LAST_STEP) params.set('s', String(state.step));
-  if (state.speedVector) params.set('v', '1');
+  if (state.method === 'speed') params.set('v', '1');
   return params.toString();
 }
 
@@ -197,7 +207,7 @@ function decodeState(hash) {
   state.active = int(params.get('k'), 0, targets.length - 1, 0);
   state.range = RANGE_CHOICES.includes(params.get('r')) ? params.get('r') : 'auto';
   state.step = int(params.get('s'), 0, LAST_STEP, LAST_STEP);
-  state.speedVector = params.get('v') === '1';
+  state.method = params.get('v') === '1' ? 'speed' : 'distance';
   resetZoom();
   return true;
 }
@@ -230,7 +240,8 @@ function draw() {
     own: model.own,
     targets: model.targets.map((t) => ({ index: t.index, sol: t.sol, avoid: t.avoid, active: t.index === state.active })),
     loose: model.targets.filter((t) => !t.sol.ok).flatMap((t) => t.points),
-    speedVector: state.speedVector,
+    method: state.method,
+    knotsPerMile: speedScale,
     multi: state.targets.length > 1,
   };
 
@@ -242,12 +253,14 @@ function draw() {
   const front = model.targets[state.active];
   const showDetail = front.sol.ok && state.step >= STEPS.indexOf('triangle');
   detailSection.classList.toggle('empty', !showDetail);
+  $('detail-title').textContent = state.method === 'speed' ? '速力三角形だけを抜き出した図' : '速力三角形の拡大図';
   if (showDetail) {
     const { w, h } = frameSize(detailFrame);
     const avoid = state.step >= AVOID_STEP ? front.avoid : null;
-    const detailView = fitView(w, h, trianglePoints(front.sol, avoid), Math.max(62, Math.min(w, h) * 0.2));
+    const points = trianglePoints(front.sol, avoid, state.method, speedScale);
+    const detailView = fitView(w, h, points, Math.max(62, Math.min(w, h) * 0.2));
     detailSvg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-    detailSvg.innerHTML = renderSheet(detailView, { ...scene, detail: true, speedVector: false });
+    detailSvg.innerHTML = renderSheet(detailView, { ...scene, detail: true });
   } else {
     detailSvg.innerHTML = '';
   }
@@ -309,6 +322,14 @@ function resultRows(target) {
       ? '止まっている物標（真速力 0）'
       : `<b>${fmtBearing(sol.true.course)}・${fmtNum(sol.true.speed)} ノット</b>`,
   );
+  if (state.method === 'speed' && state.step >= STEPS.indexOf('triangle')) {
+    rows.push(
+      row(
+        '速力ベクトルの縮尺',
+        `1 海里の目盛り ＝ ${speedScale} ノット<small>自船 ${fmtNum(sol.own.speed)} ノットの矢印は ${fmtNum(sol.own.speed / speedScale, 2)} 海里の長さ</small>`,
+      ),
+    );
+  }
 
   if (sol.aspect) {
     gate('aspect', 'アスペクト', () => {
@@ -450,7 +471,9 @@ function renderSteps() {
     return `<li><button type="button" data-step="${i}" class="${cls}"${locked ? ' disabled' : ''}${i === state.step ? ' aria-current="step"' : ''}><span class="num">${i + 1}</span><span class="name">${info.title}</span></button></li>`;
   }).join('');
   const avoid = activeTarget().avoid;
-  const text = state.step === AVOID_STEP ? AVOID_TEXT[avoid.on ? avoid.mode : 'off'] : STEP_INFO[state.step].text;
+  let text = STEP_INFO[state.step].text;
+  if (state.step === STEPS.indexOf('triangle')) text = TRIANGLE_TEXT[state.method];
+  if (state.step === AVOID_STEP) text = avoid.on ? AVOID_TEXT[state.method][avoid.mode] : AVOID_TEXT.off;
   stepText.textContent = `${state.step + 1}. ${STEP_INFO[state.step].title}：${text}`;
   $('step-prev').disabled = state.step <= 0;
   $('step-next').disabled = state.step >= limit;
@@ -461,6 +484,7 @@ function renderSteps() {
 function refresh() {
   model = buildModel(state);
   currentRange = chooseRange(model, state.range);
+  speedScale = chooseSpeedScale(model, currentRange);
   renderSteps();
   renderResults();
   draw();
@@ -506,7 +530,7 @@ function zoomToTriangle() {
   if (!front.sol.ok) return;
   const { w, h } = frameSize(sheetFrame);
   const avoid = state.step >= AVOID_STEP ? front.avoid : null;
-  const fit = fitView(w, h, trianglePoints(front.sol, avoid), 70);
+  const fit = fitView(w, h, trianglePoints(front.sol, avoid, state.method, speedScale), 70);
   const base = fullView(w, h, currentRange);
   zoom.factor = fit.ppm / base.ppm;
   zoom.cx = fit.cx;
@@ -617,7 +641,14 @@ function bindForm() {
     if (!path) return;
     const [node, key] = resolve(path);
     node[key] = control.type === 'checkbox' ? control.checked : control.value;
-    if (path === 'range') resetZoom();
+    if (path === 'range' || path === 'method') resetZoom();
+    if (path === 'method') {
+      try {
+        localStorage.setItem(METHOD_KEY, state.method);
+      } catch {
+        // storage can be unavailable (private window); the choice then lasts for this visit only
+      }
+    }
     presetSelect.value = '';
     syncDependentControls();
     refresh();
@@ -735,6 +766,8 @@ function renderPrintView() {
     active: state.active,
     step: printOptions.steps === 'current' ? state.step : LAST_STEP,
     content: printOptions.content,
+    method: state.method,
+    knotsPerMile: speedScale,
   });
 }
 
@@ -789,6 +822,11 @@ function start() {
   if (!decodeState(location.hash)) {
     loadPreset(PRESETS[0]);
     presetSelect.value = PRESETS[0].id;
+    try {
+      if (localStorage.getItem(METHOD_KEY) === 'speed') state.method = 'speed';
+    } catch {
+      // no stored choice
+    }
   }
   rebuildForm();
   refresh();

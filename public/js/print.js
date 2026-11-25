@@ -144,6 +144,10 @@ function resultBox(kind, ctx) {
     ],
   ];
   if (anyAvoid) rows.push(['避航<small>新針路・新速力</small>', 'avoid', (s, target) => avoidResult(target, multi)]);
+  const scaleNote =
+    report && ctx.method === 'speed' && step >= TRIANGLE_STEP
+      ? `<p class="condition">速力ベクトルの縮尺：1 海里の目盛り ＝ ${fmtPlain(ctx.knotsPerMile)} ノット</p>`
+      : '';
 
   const cell = (target, stepName, fill) => {
     const shown = report && target?.sol.ok && step >= STEPS.indexOf(stepName);
@@ -156,7 +160,7 @@ function resultBox(kind, ctx) {
     .map(([label, stepName, fill]) => `<tr><th scope="row">${label}</th>${targets.map((target) => cell(target, stepName, fill)).join('')}</tr>`)
     .join('');
 
-  return `<section class="box box-result"><h3>結果</h3><table class="form result">${head}<tbody>${body}</tbody></table></section>`;
+  return `<section class="box box-result"><h3>結果</h3><table class="form result">${head}<tbody>${body}</tbody></table>${scaleNote}</section>`;
 }
 
 /**
@@ -164,13 +168,14 @@ function resultBox(kind, ctx) {
  * boxes above leave, so their heights are estimated from the number of table rows; the
  * drawing then keeps the same text size however much room there is.
  */
-function detailHeight(model) {
+function detailHeight(model, method) {
   const multi = model.targets.length > 1;
   const obsRows = model.targets.reduce((count, target) => count + Math.max(2, target.rows.length), 0);
   const conditions = model.targets.filter((target) => target.avoidOn).length;
   const given = 19.1 + obsRows * 4.9 + conditions * 5;
   const result = multi ? 54.4 + (conditions ? 9 : 0) : 43 + (conditions ? 10.6 : 0);
-  const room = PAGE_HEIGHT_MM - 12 - 3 * 2.4 - given - result - 9.4;
+  const note = method === 'speed' ? 5 : 0;
+  const room = PAGE_HEIGHT_MM - 12 - 3 * 2.4 - given - result - note - 9.4;
   return Math.round(Math.min(330, Math.max(170, (DETAIL_WIDTH * room) / SIDE_WIDTH_MM)));
 }
 
@@ -178,11 +183,12 @@ function detailBox(kind, ctx, scene) {
   const front = ctx.model.targets[ctx.active];
   if (kind === 'report' && front?.sol.ok && ctx.step >= TRIANGLE_STEP) {
     const avoid = ctx.step >= AVOID_STEP ? front.avoid : null;
-    const height = detailHeight(ctx.model);
-    const view = fitView(DETAIL_WIDTH, height, trianglePoints(front.sol, avoid), Math.min(64, height * 0.22));
+    const height = detailHeight(ctx.model, ctx.method);
+    const points = trianglePoints(front.sol, avoid, ctx.method, ctx.knotsPerMile);
+    const view = fitView(DETAIL_WIDTH, height, points, Math.min(64, height * 0.22));
     const which = ctx.model.targets.length > 1 ? `（物標 ${roman(front.index)}）` : '';
     return (
-      `<section class="box box-detail"><h3>速力三角形の拡大図${which}</h3>` +
+      `<section class="box box-detail"><h3>${ctx.method === 'speed' ? '速力三角形だけを抜き出した図' : '速力三角形の拡大図'}${which}</h3>` +
       `<svg class="sheet static" viewBox="0 0 ${DETAIL_WIDTH} ${height}" role="img" aria-label="速力三角形の拡大図">${renderSheet(view, { ...scene, detail: true })}</svg></section>`
     );
   }
@@ -199,7 +205,8 @@ function page(kind, ctx) {
           own: model.own,
           targets: model.targets.map((t) => ({ index: t.index, sol: t.sol, avoid: t.avoid, active: t.index === active })),
           loose: model.targets.filter((t) => !t.sol.ok).flatMap((t) => t.points),
-          speedVector: false,
+          method: ctx.method,
+          knotsPerMile: ctx.knotsPerMile,
           multi: model.targets.length > 1,
         }
       : { range, step: 0, own: null, targets: [], loose: [], blank: true };
@@ -218,10 +225,12 @@ function page(kind, ctx) {
 }
 
 /**
- * @param {{model: object, range: number, active: number, step: number, content: keyof typeof PRINT_CONTENTS}} ctx
+ * @param {{model: object, range: number, active: number, step: number, content: keyof typeof PRINT_CONTENTS,
+ *   method?: 'distance' | 'speed', knotsPerMile?: number}} ctx
  * @returns {string} markup of one or more A4 landscape pages
  */
 export function buildPrintPages(ctx) {
   const kinds = PRINT_CONTENTS[ctx.content] ?? PRINT_CONTENTS.report;
-  return kinds.map((kind) => page(kind, ctx)).join('');
+  const full = { method: 'distance', knotsPerMile: 1, ...ctx };
+  return kinds.map((kind) => page(kind, full)).join('');
 }
