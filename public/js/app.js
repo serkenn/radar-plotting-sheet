@@ -1,18 +1,20 @@
 // Form state, results table, step control and zoom for the plotting sheet.
 
 import { fmtAngle, fmtAspect, fmtBearing, fmtNum, fmtTurn, roman } from './format.js';
-import { bearingOf, len, vec } from './geometry.js';
+import { bearingOf, len } from './geometry.js';
+import { buildModel, chooseRange } from './model.js';
 import { PRESETS, emptyTarget } from './presets.js';
+import { buildPrintPages } from './print.js';
 import { STEPS, fitView, fullView, renderSheet, trianglePoints } from './render.js';
-import { formatTime, parseNumber, parseTime, solveAvoidance, solveTarget, toHalfWidth } from './solve.js';
+import { formatTime, toHalfWidth } from './solve.js';
 
 const MAX_TARGETS = 3;
 const MAX_OBS = 4;
-const RANGES = [1.5, 3, 6, 12, 24, 48, 96];
 const RANGE_CHOICES = ['auto', '3', '6', '12', '24', '48'];
 const LAST_STEP = STEPS.length - 1;
 const AVOID_STEP = STEPS.indexOf('avoid');
 const MAX_ZOOM = 150;
+const PAGE_WIDTH_PX = (297 / 25.4) * 96; // A4 landscape at CSS resolution
 
 const STEP_INFO = [
   {
@@ -76,6 +78,8 @@ const resultsTarget = $('results-target');
 const presetSelect = $('preset');
 const avoidFields = $('avoid-fields');
 const sideField = $('side-field');
+const printView = $('print-view');
+const printPages = $('print-pages');
 const SHEET_TITLE = sheetSvg.innerHTML;
 
 const state = {
@@ -85,8 +89,8 @@ const state = {
   range: 'auto',
   step: LAST_STEP,
   speedVector: false,
-  blank: false,
 };
+const printOptions = { content: 'report', steps: 'all' };
 const zoom = { factor: 1, cx: 0, cy: 0 };
 let model = null;
 let currentRange = 12;
@@ -103,7 +107,6 @@ function loadPreset(preset) {
   state.range = 'auto';
   state.step = LAST_STEP;
   state.speedVector = false;
-  state.blank = false;
   resetZoom();
 }
 
@@ -114,7 +117,6 @@ function clearAll() {
   state.range = 'auto';
   state.step = LAST_STEP;
   state.speedVector = false;
-  state.blank = false;
   resetZoom();
 }
 
@@ -196,7 +198,6 @@ function decodeState(hash) {
   state.range = RANGE_CHOICES.includes(params.get('r')) ? params.get('r') : 'auto';
   state.step = int(params.get('s'), 0, LAST_STEP, LAST_STEP);
   state.speedVector = params.get('v') === '1';
-  state.blank = false;
   resetZoom();
   return true;
 }
@@ -207,55 +208,6 @@ function scheduleHashUpdate() {
   hashTimer = setTimeout(() => {
     history.replaceState(null, '', `#${encodeState()}`);
   }, 200);
-}
-
-// ---------------------------------------------------------------- model
-
-function compute() {
-  const own = { course: parseNumber(state.own.course), speed: parseNumber(state.own.speed) };
-  const ownOk =
-    Number.isFinite(own.course) && own.course >= 0 && own.course <= 360 && Number.isFinite(own.speed) && own.speed >= 0;
-
-  const targets = state.targets.map((t, index) => {
-    const filled = t.obs
-      .filter((o) => o.time.trim() || o.bearing.trim() || o.range.trim())
-      .map((o) => ({ time: parseTime(o.time), bearing: parseNumber(o.bearing), range: parseNumber(o.range) }));
-    const valid = filled.filter(
-      (o) => o.time !== null && Number.isFinite(o.bearing) && o.bearing >= 0 && o.bearing <= 360 && o.range > 0,
-    );
-
-    let sol;
-    if (filled.length !== valid.length) sol = { ok: false, error: 'observation' };
-    else if (valid.length < 2) sol = { ok: false, error: 'few' };
-    else if (!ownOk) sol = { ok: false, error: 'own' };
-    else sol = solveTarget(own, valid);
-
-    let avoid = null;
-    if (sol.ok && t.avoid.on) {
-      avoid = solveAvoidance(sol, {
-        time: parseTime(t.avoid.time) ?? NaN,
-        mode: t.avoid.mode,
-        distance: parseNumber(t.avoid.dist),
-        side: t.avoid.side,
-      });
-    }
-    return {
-      index,
-      sol,
-      avoid,
-      avoidOn: t.avoid.on,
-      points: valid.map((o) => vec(o.bearing, o.range)),
-      farthest: Math.max(0, ...valid.map((o) => o.range)),
-    };
-  });
-  return { own: ownOk ? own : null, targets };
-}
-
-function pickRange() {
-  if (state.range !== 'auto') return Number(state.range);
-  const need = Math.max(0, ...model.targets.map((t) => t.farthest));
-  if (!need) return 12;
-  return RANGES.find((r) => r >= need - 1e-9) ?? RANGES[RANGES.length - 1];
 }
 
 // ---------------------------------------------------------------- drawing
@@ -278,7 +230,6 @@ function draw() {
     own: model.own,
     targets: model.targets.map((t) => ({ index: t.index, sol: t.sol, avoid: t.avoid, active: t.index === state.active })),
     loose: model.targets.filter((t) => !t.sol.ok).flatMap((t) => t.points),
-    blank: state.blank,
     speedVector: state.speedVector,
     multi: state.targets.length > 1,
   };
@@ -289,7 +240,7 @@ function draw() {
   sheetSvg.classList.toggle('zoomed', zoom.factor > 1.001);
 
   const front = model.targets[state.active];
-  const showDetail = front.sol.ok && !state.blank && state.step >= STEPS.indexOf('triangle');
+  const showDetail = front.sol.ok && state.step >= STEPS.indexOf('triangle');
   detailSection.classList.toggle('empty', !showDetail);
   if (showDetail) {
     const { w, h } = frameSize(detailFrame);
@@ -423,10 +374,6 @@ function resultRows(target) {
 function renderResults() {
   const target = model.targets[state.active];
   resultsTarget.textContent = state.targets.length > 1 ? `物標 ${roman(state.active)}` : '';
-  if (state.blank) {
-    resultsEl.innerHTML = '<p class="hint">白紙の用紙を表示しています。「表示」のチェックを外すと作図と結果に戻ります。</p>';
-    return;
-  }
   if (!target.sol.ok) {
     resultsEl.innerHTML = `<p class="hint">${TARGET_ERRORS[target.sol.error] ?? '入力を確かめてください。'}</p>`;
     return;
@@ -512,8 +459,8 @@ function renderSteps() {
 // ---------------------------------------------------------------- update
 
 function refresh() {
-  model = compute();
-  currentRange = pickRange();
+  model = buildModel(state);
+  currentRange = chooseRange(model, state.range);
   renderSteps();
   renderResults();
   draw();
@@ -776,7 +723,60 @@ function bindTopBar() {
     }, 1800);
   });
 
-  $('print').addEventListener('click', () => window.print());
+  $('print').addEventListener('click', enterPrintMode);
+}
+
+// ---------------------------------------------------------------- print mode
+
+function renderPrintView() {
+  printPages.innerHTML = buildPrintPages({
+    model,
+    range: currentRange,
+    active: state.active,
+    step: printOptions.steps === 'current' ? state.step : LAST_STEP,
+    content: printOptions.content,
+  });
+}
+
+/** Shrink the page preview to the window width; printing always uses full size. */
+function fitPrintPreview() {
+  const scale = Math.min(1, (document.documentElement.clientWidth - 24) / PAGE_WIDTH_PX);
+  printView.style.setProperty('--preview-zoom', scale.toFixed(4));
+}
+
+function enterPrintMode() {
+  renderPrintView();
+  fitPrintPreview();
+  document.body.classList.add('print-mode');
+  window.scrollTo(0, 0);
+  $('print-go').focus();
+}
+
+function exitPrintMode() {
+  document.body.classList.remove('print-mode');
+  queueDraw();
+  $('print').focus();
+}
+
+function bindPrint() {
+  $('print-content').addEventListener('change', (event) => {
+    printOptions.content = event.target.value;
+    renderPrintView();
+  });
+  $('print-steps').addEventListener('change', (event) => {
+    printOptions.steps = event.target.value;
+    renderPrintView();
+  });
+  $('print-go').addEventListener('click', () => window.print());
+  $('print-close').addEventListener('click', exitPrintMode);
+  // Printing from the browser menu uses the same pages.
+  window.addEventListener('beforeprint', renderPrintView);
+  window.addEventListener('resize', () => {
+    if (document.body.classList.contains('print-mode')) fitPrintPreview();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && document.body.classList.contains('print-mode')) exitPrintMode();
+  });
 }
 
 function start() {
@@ -784,6 +784,7 @@ function start() {
   bindForm();
   bindSteps();
   bindZoom();
+  bindPrint();
 
   if (!decodeState(location.hash)) {
     loadPreset(PRESETS[0]);

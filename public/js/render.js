@@ -199,6 +199,23 @@ function drawSheet(pen, range, detail) {
   );
 }
 
+/**
+ * Linear distance scale with the same miles-to-pixels ratio as the sheet, for use with dividers.
+ * Drawn from `left` to the right; `baseline` is the y of the scale line.
+ */
+export function renderScaleBar(view, range, left, baseline) {
+  const x = (miles) => r1(left + miles * view.ppm);
+  const parts = [`<line class="tick" x1="${x(0)}" y1="${baseline}" x2="${x(range)}" y2="${baseline}"/>`];
+  for (let i = 0; i <= 60; i += 1) {
+    const miles = (range / 60) * i;
+    const size = i % 10 === 0 ? 8 : i % 5 === 0 ? 5.5 : 3;
+    parts.push(`<line class="tick" x1="${x(miles)}" y1="${baseline}" x2="${x(miles)}" y2="${r1(baseline + size)}"/>`);
+    if (i % 10 === 0) parts.push(`<text class="tick-label" x="${x(miles)}" y="${baseline + 17}">${fmtRange(miles)}</text>`);
+  }
+  parts.push(`<text class="range-label" x="${r1(x(range) + 14)}" y="${baseline + 20}">海里</text>`);
+  return parts.join('');
+}
+
 function drawOwnShip(pen, own, range) {
   pen.line(ORIGIN, vec(own.course, range), 'own thin dash');
   const [x, y] = pen.xy(ORIGIN);

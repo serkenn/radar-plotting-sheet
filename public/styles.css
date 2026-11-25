@@ -882,67 +882,272 @@ table.res small {
   margin: 6px 0 0;
 }
 
-/* ---------------------------------------------------------------- print */
+/* ---------------------------------------------------------------- print mode */
+
+.print-view {
+  display: none;
+}
+
+body.print-mode > :not(.print-view) {
+  display: none;
+}
+
+body.print-mode .print-view {
+  display: block;
+}
+
+.print-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 14px;
+  padding: 10px 16px;
+  background: var(--header);
+  color: var(--header-text);
+}
+
+.print-bar h2 {
+  font-size: 17px;
+  align-self: center;
+  margin-right: auto;
+}
+
+.print-bar h2 small {
+  margin-left: 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.print-bar label {
+  color: inherit;
+  font-size: 12px;
+}
+
+.print-bar select,
+.print-bar button {
+  width: auto;
+  background: rgb(255 255 255 / 0.1);
+  border: 1px solid rgb(255 255 255 / 0.28);
+  color: var(--header-text);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 14px;
+}
+
+.print-bar option {
+  color: #1c2733;
+  background: #ffffff;
+}
+
+.print-bar button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.print-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.print-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 12px 32px;
+}
+
+/* One A4 landscape sheet. Sizes are in millimetres so that the preview and the printout match. */
+.page {
+  /* always printed dark on white, whatever the screen theme is */
+  --paper: #ffffff;
+  --grid: #b4bac2;
+  --grid-strong: #4a525d;
+  --ink: #000000;
+  --muted: #2f363f;
+  --border: #6f7884;
+  --rel: #c2410c;
+  --own: #1259a8;
+  --tgt: #111111;
+  --cpa: #0b7285;
+  --avoid: #9c1d6e;
+  --port: #c92a2a;
+  --stbd: #2b8a3e;
+
+  box-sizing: content-box;
+  width: 277mm;
+  height: 189mm;
+  padding: 10mm;
+  display: grid;
+  grid-template-columns: 182mm minmax(0, 1fr);
+  gap: 5mm;
+  background: #ffffff;
+  color: #000000;
+  font-size: 8.5pt;
+  line-height: 1.35;
+  overflow: hidden;
+  box-shadow: 0 2px 14px rgb(0 0 0 / 0.3);
+  zoom: var(--preview-zoom, 1);
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+
+.page-sheet svg.sheet {
+  width: 182mm;
+  height: auto;
+}
+
+.page-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2.4mm;
+  min-height: 0;
+  height: 189mm;
+}
+
+.page-head h2 {
+  font-size: 12.5pt;
+  letter-spacing: 0.02em;
+}
+
+.page-head p {
+  display: flex;
+  align-items: center;
+  gap: 3mm;
+  margin: 0.8mm 0 0;
+}
+
+.page-kind {
+  border: 0.3mm solid #000000;
+  border-radius: 0.8mm;
+  padding: 0 1.8mm;
+  font-weight: 700;
+}
+
+.box {
+  border: 0.3mm solid #222222;
+  border-radius: 1mm;
+  padding: 1.4mm 2mm 2mm;
+}
+
+.box h3 {
+  margin: 0 0 1mm;
+  font-size: 8.5pt;
+  line-height: 1.3;
+}
+
+.own-line,
+.condition {
+  margin: 0 0 1.2mm;
+}
+
+.condition {
+  margin: 1.2mm 0 0;
+}
+
+.blank {
+  display: inline-block;
+  width: 16mm;
+  border-bottom: 0.25mm solid #000000;
+}
+
+table.form {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+table.form th,
+table.form td {
+  border: 0.25mm solid #555555;
+  padding: 0.7mm 1.4mm;
+  text-align: left;
+  vertical-align: middle;
+}
+
+table.form thead th {
+  background: #eceff2;
+  text-align: center;
+  font-weight: 600;
+}
+
+table.form tbody th {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+table.form small {
+  display: block;
+  font-size: 6.8pt;
+  font-weight: 400;
+  color: #2f363f;
+}
+
+table.form tr.write td,
+table.form td.write {
+  height: 7.6mm;
+}
+
+table.form.result tbody th {
+  width: 30mm;
+}
+
+.box-detail {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.box-detail svg.sheet {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: auto;
+}
+
+@page {
+  size: A4 landscape;
+  margin: 0;
+}
 
 @media print {
-  :root {
-    color-scheme: light;
-    --bg: #ffffff;
-    --surface: #ffffff;
-    --surface-2: #ffffff;
-    --text: #000000;
-    --muted: #444444;
-    --border: #bbbbbb;
-    --paper: #ffffff;
-    --grid: #b5b5b5;
-    --grid-strong: #666666;
-    --ink: #000000;
-    --tgt: #000000;
+  html,
+  body {
+    background: #ffffff;
   }
 
-  .top-actions,
-  .inputs,
-  .sheet-tools,
-  .step-row,
-  .foot {
+  body > :not(.print-view) {
     display: none !important;
   }
 
-  .top {
-    background: none;
-    color: #000000;
-    padding: 0 0 6px;
+  .print-view {
+    display: block !important;
   }
 
-  .brand p {
-    display: none;
+  .print-bar {
+    display: none !important;
   }
 
-  .layout {
+  .print-pages {
     display: block;
     padding: 0;
-    max-width: none;
   }
 
-  .board {
-    position: static;
-    width: 100%;
-    max-width: 180mm;
+  .page {
+    zoom: 1;
+    box-shadow: none;
+    break-after: page;
   }
 
-  .sheet-frame {
-    border: 0;
-  }
-
-  .steps,
-  .results,
-  .detail {
-    border: 0;
-    padding: 6px 0;
-    break-inside: avoid;
-  }
-
-  .detail-frame {
-    max-width: 120mm;
+  .page:last-child {
+    break-after: auto;
   }
 }
