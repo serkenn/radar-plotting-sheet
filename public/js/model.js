@@ -80,9 +80,11 @@ function fastestSpeed(model) {
  *
  * In the speed-vector method the vectors are drawn on the same sheet as the plots.
  * By default ("auto") they also use the same scale, one mile = one knot (a one-hour
- * run), and the range grows until both the plots and the vectors fit: the whole sheet
- * then reads on one set of figures. "fit" keeps the range for the plots and shrinks the
- * vectors to a round scale of their own; a number fixes that scale.
+ * run), so the whole sheet reads on one set of figures. With the range on "auto" it
+ * grows until both the plots and the vectors fit; with a range set by hand the vectors
+ * keep that scale and may run out past the last ring (see vectorReach).
+ * Only on request do the vectors get a scale of their own: "fit" keeps the range for
+ * the plots and shrinks the vectors to a round scale; a number fixes that scale.
  *
  * @param {'auto' | string} rangeChoice
  * @param {'distance' | 'speed'} method
@@ -98,12 +100,24 @@ export function chooseScales(model, rangeChoice, method, scaleChoice) {
     const range = fixedRange ?? smallestRange(plots);
     return { range, knotsPerMile: chooseSpeedScale(model, range) };
   }
-  const wanted = scaleChoice === 'auto' ? 1 : Number(scaleChoice);
-  const fastest = fastestSpeed(model);
-  const range = fixedRange ?? smallestRange(Math.max(plots, fastest / wanted));
-  // "auto" with a range fixed by hand: vectors that would leave the sheet are shrunk instead.
-  const knotsPerMile = scaleChoice === 'auto' && fastest / wanted > range ? chooseSpeedScale(model, range) : wanted;
+  const knotsPerMile = scaleChoice === 'auto' ? 1 : Number(scaleChoice);
+  const range = fixedRange ?? smallestRange(Math.max(plots, fastestSpeed(model) / knotsPerMile));
   return { range, knotsPerMile };
+}
+
+/** How far from the centre the longest speed vector reaches, in miles of the sheet. */
+export function vectorReach(model, knotsPerMile) {
+  return fastestSpeed(model) / knotsPerMile;
+}
+
+/** Tips of the speed vectors drawn from the centre (own ship and every solved target). */
+export function vectorTips(model, knotsPerMile) {
+  const tips = [];
+  if (model.own) tips.push(vec(model.own.course, model.own.speed / knotsPerMile));
+  for (const t of model.targets) {
+    if (t.sol.ok) tips.push({ x: t.sol.true.vel.x / knotsPerMile, y: t.sol.true.vel.y / knotsPerMile });
+  }
+  return tips;
 }
 
 /** "1 時間ぶん", "30 分ぶん"…: the run that a speed vector stands for at this scale. */

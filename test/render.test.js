@@ -103,3 +103,23 @@ test('with one shared scale the rings carry a single set of figures', () => {
   assert.ok(!/\n\d+(\.\d+)?(kn|海里)\n/.test(seen), 'no second set of ring figures');
   assert.ok(seen.includes('自船 040°・15.0kn'));
 });
+
+test('the picture makes room for vectors that run past the last ring', () => {
+  const plain = fullView(800, 800, 12);
+  assert.deepEqual([plain.cx, plain.cy, plain.reach], [0, 0, 12]);
+  assert.equal(fullView(800, 800, 12, [{ x: 3, y: -5 }]).ppm, plain.ppm, 'tips inside the sheet change nothing');
+  // a tip 6 miles past the ring to the north: the picture grows by 6 miles and moves 3 miles north
+  const moved = fullView(800, 800, 12, [{ x: 0, y: 18 }]);
+  assert.deepEqual([moved.cx, moved.cy, moved.reach], [0, 3, 15]);
+  assert.ok(Math.abs(moved.ppm - (plain.ppm * 12) / 15) < 1e-9);
+});
+
+test('the triangle-only view carries its speed rings out as far as the vectors', () => {
+  const { model, scene } = sceneFor('crossing', 'speed');
+  const fixed = chooseScales(model, '12', 'speed', 'auto'); // 12 mile sheet, target at 23 knots
+  assert.deepEqual(fixed, { range: 12, knotsPerMile: 1 });
+  const seen = visible(
+    renderSheet(fullView(600, 600, 12, [{ x: 0, y: 25 }]), { ...scene, range: 12, knotsPerMile: 1, extent: 25, detail: true }),
+  );
+  assert.ok(seen.includes('\n24kn\n'), 'rings beyond the range are figured too');
+});

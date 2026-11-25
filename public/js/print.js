@@ -26,9 +26,9 @@ const fmtPlain = (value) => String(Math.round(value * 100) / 100);
 const BLANK = '<span class="blank"></span>';
 const signed = (value) => `${value >= 0 ? '+' : '−'}${fmtAngle(Math.abs(value))}`;
 
-function sheetSvg(scene, range, unit) {
-  const view = fullView(SHEET, SHEET, range);
-  const left = SHEET / 2 - view.ppm * range;
+function sheetSvg(scene, range, unit, tips = []) {
+  const view = fullView(SHEET, SHEET, range, tips);
+  const left = SHEET / 2 + (-range - view.cx) * view.ppm; // under the left edge of the sheet
   return (
     `<svg class="sheet static" viewBox="0 0 ${SHEET} ${SHEET_HEIGHT}" role="img" aria-label="プロッティング用紙">` +
     renderSheet(view, scene) +
@@ -215,6 +215,7 @@ function page(kind, ctx) {
           loose: model.targets.filter((t) => !t.sol.ok).flatMap((t) => t.points),
           method: ctx.method,
           knotsPerMile: ctx.knotsPerMile,
+          extent: ctx.extent ?? range,
           multi: model.targets.length > 1,
         }
       : { range, step: 0, own: null, targets: [], loose: [], blank: true };
@@ -226,7 +227,7 @@ function page(kind, ctx) {
 
   return (
     `<section class="page page-${kind}">` +
-    `<div class="page-sheet">${sheetSvg(scene, range, barUnit)}</div>` +
+    `<div class="page-sheet">${sheetSvg(scene, range, barUnit, kind === 'report' ? ctx.tips ?? [] : [])}</div>` +
     '<div class="page-side">' +
     `<header class="page-head"><h2>レーダー・プロッティング用紙</h2><p>${tag ? `<span class="page-kind">${tag}</span>` : ''}<span>レンジ ${fmtPlain(range)} 海里${scaleHead}</span></p></header>` +
     givenBox(kind, ctx) +
@@ -238,7 +239,7 @@ function page(kind, ctx) {
 
 /**
  * @param {{model: object, range: number, active: number, step: number, content: keyof typeof PRINT_CONTENTS,
- *   method?: 'distance' | 'speed', knotsPerMile?: number}} ctx
+ *   method?: 'distance' | 'speed', knotsPerMile?: number, extent?: number, tips?: {x: number, y: number}[]}} ctx
  * @returns {string} markup of one or more A4 landscape pages
  */
 export function buildPrintPages(ctx) {

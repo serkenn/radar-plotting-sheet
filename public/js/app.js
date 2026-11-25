@@ -2,7 +2,7 @@
 
 import { fmtAngle, fmtAspect, fmtBearing, fmtNum, fmtTurn, roman } from './format.js';
 import { bearingOf, len } from './geometry.js';
-import { buildModel, chooseScales, scaleTimeBase } from './model.js';
+import { buildModel, chooseScales, scaleTimeBase, vectorReach, vectorTips } from './model.js';
 import { PRESETS, emptyTarget } from './presets.js';
 import { buildPrintPages } from './print.js';
 import { STEPS, fitView, fullView, renderSheet, trianglePoints } from './render.js';
@@ -108,6 +108,8 @@ const zoom = { factor: 1, cx: 0, cy: 0 };
 let model = null;
 let currentRange = 12;
 let speedScale = 1;
+let sheetExtent = 12; // the range, or the reach of the vectors when they run past the last ring
+let sheetTips = []; // tips of the speed vectors, kept in view
 
 // ---------------------------------------------------------------- state
 
@@ -233,7 +235,8 @@ function frameSize(frame) {
 
 function mainView() {
   const { w, h } = frameSize(sheetFrame);
-  const base = fullView(w, h, currentRange);
+  const base = fullView(w, h, currentRange, sheetTips);
+  if (zoom.factor <= 1.001) return base;
   return { ...base, cx: zoom.cx, cy: zoom.cy, ppm: base.ppm * zoom.factor };
 }
 
@@ -246,6 +249,7 @@ function draw() {
     loose: model.targets.filter((t) => !t.sol.ok).flatMap((t) => t.points),
     method: state.method,
     knotsPerMile: speedScale,
+    extent: sheetExtent,
     multi: state.targets.length > 1,
   };
 
@@ -327,6 +331,15 @@ function resultRows(target) {
       : `<b>${fmtBearing(sol.true.course)}・${fmtNum(sol.true.speed)} ノット</b>`,
   );
   if (state.method === 'speed' && state.step >= STEPS.indexOf('triangle')) {
+    if (sheetExtent > currentRange) {
+      const roomy = chooseScales(model, 'auto', state.method, state.speedScale).range;
+      rows.push(
+        row(
+          'メモ',
+          `速力の矢印がレンジ（${currentRange} 海里）の外まで伸びています。レンジを「自動」にすると、矢印まで収まる ${roomy} 海里の用紙になります。`,
+        ),
+      );
+    }
     rows.push(
       row(
         '速力ベクトルの縮尺',
@@ -499,6 +512,8 @@ function renderSteps() {
 function refresh() {
   model = buildModel(state);
   ({ range: currentRange, knotsPerMile: speedScale } = chooseScales(model, state.range, state.method, state.speedScale));
+  sheetTips = state.method === 'speed' ? vectorTips(model, speedScale) : [];
+  sheetExtent = Math.max(currentRange, state.method === 'speed' ? vectorReach(model, speedScale) : 0);
   renderSteps();
   renderResults();
   draw();
@@ -520,9 +535,9 @@ function clampZoom() {
     return;
   }
   const d = Math.hypot(zoom.cx, zoom.cy);
-  if (d > currentRange) {
-    zoom.cx *= currentRange / d;
-    zoom.cy *= currentRange / d;
+  if (d > sheetExtent) {
+    zoom.cx *= sheetExtent / d;
+    zoom.cy *= sheetExtent / d;
   }
 }
 
@@ -545,7 +560,7 @@ function zoomToTriangle() {
   const { w, h } = frameSize(sheetFrame);
   const avoid = state.step >= AVOID_STEP ? front.avoid : null;
   const fit = fitView(w, h, trianglePoints(front.sol, avoid, state.method, speedScale), 70);
-  const base = fullView(w, h, currentRange);
+  const base = fullView(w, h, currentRange, sheetTips);
   zoom.factor = fit.ppm / base.ppm;
   zoom.cx = fit.cx;
   zoom.cy = fit.cy;
@@ -782,6 +797,8 @@ function renderPrintView() {
     content: printOptions.content,
     method: state.method,
     knotsPerMile: speedScale,
+    extent: sheetExtent,
+    tips: sheetTips,
   });
 }
 

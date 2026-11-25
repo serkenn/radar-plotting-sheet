@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildModel, chooseRange, chooseScales, chooseSpeedScale, scaleTimeBase } from '../public/js/model.js';
+import { buildModel, chooseRange, chooseScales, chooseSpeedScale, scaleTimeBase, vectorReach, vectorTips } from '../public/js/model.js';
 import { PRESETS } from '../public/js/presets.js';
 import { PRINT_CONTENTS, buildPrintPages } from '../public/js/print.js';
 
@@ -109,8 +109,10 @@ test('range and speed scale are chosen together', () => {
   assert.deepEqual(chooseScales(model, 'auto', 'speed', 'fit'), { range: 12, knotsPerMile: 2 });
   assert.deepEqual(chooseScales(model, 'auto', 'speed', '2'), { range: 12, knotsPerMile: 2 });
   assert.deepEqual(chooseScales(model, 'auto', 'speed', '10'), { range: 12, knotsPerMile: 10 });
-  // a range fixed by hand is kept; on "auto" the vectors are shrunk rather than lost
-  assert.deepEqual(chooseScales(model, '12', 'speed', 'auto'), { range: 12, knotsPerMile: 2 });
+  // a range set by hand is kept, and so is the shared scale: the vectors then run past the last ring
+  assert.deepEqual(chooseScales(model, '12', 'speed', 'auto'), { range: 12, knotsPerMile: 1 });
+  assert.ok(vectorReach(model, 1) > 21 && vectorReach(model, 1) < 21.2);
+  assert.ok(Math.abs(vectorReach(model, 2) - vectorReach(model, 1) / 2) < 1e-12);
   assert.deepEqual(chooseScales(model, '48', 'speed', 'auto'), { range: 48, knotsPerMile: 1 });
   // the distance-vector method has no speed vectors to make room for
   assert.deepEqual(chooseScales(model, 'auto', 'distance', 'auto'), { range: 12, knotsPerMile: 1 });
@@ -144,4 +146,19 @@ test('with a separate vector scale the two sets of figures carry their units', (
   assert.ok(seen.includes('レンジ 12 海里　速力の矢印は 1 海里＝2 ノット'));
   assert.ok(seen.includes('30 分ぶんの距離'));
   assert.ok(seen.includes('\n24kn\n') && seen.includes('\n12海里\n'));
+});
+
+test('a range set by hand is the scale of the whole report, vectors included', () => {
+  const model = buildModel(preset('starboard'));
+  const { range, knotsPerMile } = chooseScales(model, '12', 'speed', 'auto');
+  const tips = vectorTips(model, knotsPerMile);
+  assert.equal(tips.length, 2, 'own ship and one target');
+  const html = buildPrintPages({ model, range, active: 0, step: 5, content: 'report', method: 'speed', knotsPerMile, extent: vectorReach(model, knotsPerMile), tips });
+  const seen = visible(html);
+  assert.ok(seen.includes('レンジ 12 海里（速力の矢印も同じ目盛り）'));
+  const sheet = visible(html.slice(0, html.indexOf('<div class="page-side">')));
+  // rings and scale bar stop at 12: nothing on the sheet reads 24
+  assert.ok(sheet.includes('\n12\n'));
+  assert.ok(!/\n(24|24kn|20kn)\n/.test(sheet), 'no figures from a 24 scale');
+  assert.ok(sheet.includes('他船 035°・21.1kn'), 'the long vector is still drawn');
 });

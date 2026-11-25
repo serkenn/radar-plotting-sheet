@@ -14,10 +14,33 @@ const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
 const esc = (text) => String(text).replace(/[&<>"]/g, (ch) => ESCAPES[ch]);
 const mid = (a, b) => scale(add(a, b), 0.5);
 
-/** View that shows the whole sheet. */
-export function fullView(width, height, range) {
+/**
+ * View that shows the whole sheet.
+ * @param {{x: number, y: number}[]} extra points that must be visible as well, such as the
+ *   tips of speed vectors that run out past the last ring. The picture then moves towards
+ *   them and the sheet is drawn only as much smaller as it has to be.
+ */
+export function fullView(width, height, range, extra = []) {
   const pad = Math.min(width, height) < 430 ? 30 : 38;
-  return { w: width, h: height, cx: 0, cy: 0, ppm: Math.max(0.5, (Math.min(width, height) / 2 - pad) / range) };
+  let minX = -range;
+  let maxX = range;
+  let minY = -range;
+  let maxY = range;
+  for (const p of extra) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const reach = Math.max(maxX - minX, maxY - minY) / 2; // half the side of the square shown, in miles
+  return {
+    w: width,
+    h: height,
+    cx: (minX + maxX) / 2,
+    cy: (minY + maxY) / 2,
+    reach,
+    ppm: Math.max(0.5, (Math.min(width, height) / 2 - pad) / reach),
+  };
 }
 
 /**
@@ -255,20 +278,22 @@ function textWidth(label, size) {
   return ems * size;
 }
 
-function drawSheet(pen, range, detail, knots = null) {
+function drawSheet(pen, range, detail, knots = null, extent = range) {
   const [cx, cy] = pen.xy(ORIGIN);
   const radius = pen.px(range);
   const minor = range / 12;
-  pen.raw(`<circle class="paper" cx="${r1(cx)}" cy="${r1(cy)}" r="${r1(radius)}"/>`);
+  // Where the triangle is shown alone, the rings are its speed scale: they go on as far as the vectors do.
+  const rings = detail && knots ? Math.max(12, Math.ceil(extent / minor - 1e-9)) : 12;
+  pen.raw(`<circle class="paper" cx="${r1(cx)}" cy="${r1(cy)}" r="${r1(pen.px(rings * minor))}"/>`);
 
   for (let b = 0; b < 360; b += 10) {
     const kind = b % 90 === 0 ? ' axis' : b % 30 === 0 ? ' strong' : '';
     const from = vec(b, b % 30 === 0 ? minor : minor * 2);
     const [x1, y1] = pen.xy(from);
-    const [x2, y2] = pen.xy(vec(b, range));
+    const [x2, y2] = pen.xy(vec(b, rings * minor));
     pen.raw(`<line class="radial${kind}" x1="${r1(x1)}" y1="${r1(y1)}" x2="${r1(x2)}" y2="${r1(y2)}"/>`);
   }
-  for (let i = 1; i <= 12; i += 1) {
+  for (let i = 1; i <= rings; i += 1) {
     const kind = i === 12 ? 'outer' : i % 2 === 0 ? 'major' : 'minor';
     pen.raw(`<circle class="ring ${kind}" cx="${r1(cx)}" cy="${r1(cy)}" r="${r1(pen.px(i * minor))}"/>`);
   }
@@ -301,7 +326,7 @@ function drawSheet(pen, range, detail, knots = null) {
   // sets are told apart by their units. Where the triangle is shown alone, the rings
   // are figured in knots only.
   const ownScale = Boolean(knots) && knots !== 1;
-  for (let i = 2; i <= 12; i += 2) {
+  for (let i = 2; i <= rings; i += 2) {
     if (!(detail && knots)) {
       const [x, y] = pen.xy(vec(180, i * minor));
       const unit = ownScale && i === 12 ? '海里' : '';
@@ -409,7 +434,8 @@ function drawSpeedTriangle(pen, target, scene, avoidShown) {
     return len(d) < 1e-9 ? 0 : bearingOf(d);
   };
   const size = pen.px(Math.max(len(own), len(tgt), len(sub(tgt, own))));
-  const roomy = active && (scene.detail ? size >= 120 : size >= 170 && pen.px(scene.range) >= 240);
+  // on the full sheet, labels are for a picture at least 480 px across (not a phone-sized one)
+  const roomy = active && (scene.detail ? size >= 120 : size >= 170 && pen.px(pen.view.reach ?? scene.range) >= 240);
 
   if (active && sol.own.speed > 0) pen.arrow(ORIGIN, own, 'own bold');
   if (sol.true.course !== null) pen.arrow(ORIGIN, tgt, 'tgt bold');
@@ -600,14 +626,14 @@ function drawTarget(pen, target, scene) {
  * @param {{w: number, h: number, cx: number, cy: number, ppm: number}} view
  * @param {{range: number, step: number, own: object | null, targets: object[], loose: object[],
  *   blank?: boolean, detail?: boolean, multi?: boolean,
- *   method?: 'distance' | 'speed', knotsPerMile?: number}} scene
+ *   method?: 'distance' | 'speed', knotsPerMile?: number, extent?: number}} scene
  * @returns {string} SVG markup for the inside of the <svg> element
  */
 export function renderSheet(view, scene) {
   const pen = new Pen(view);
   const full = { method: 'distance', knotsPerMile: 1, ...scene };
   const vectorsShown = !full.blank && full.method === 'speed' && full.step >= STEPS.indexOf('triangle');
-  drawSheet(pen, full.range, full.detail, vectorsShown ? full.knotsPerMile : null);
+  drawSheet(pen, full.range, full.detail, vectorsShown ? full.knotsPerMile : null, full.extent ?? full.range);
   if (full.blank) return pen.toString();
 
   if (full.own) drawOwnShip(pen, full.own, full.range);
