@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>レーダー・プロッティング用紙 | Radar Plotting Sheet</title>
+  <meta name="description" content="自船の針路・速力と他船の観測値（時刻・真方位・距離）を入れると、相対運動線、CPA、速力三角形、アスペクト、避航の作図を順に描く学習用のレーダー・プロッティング用紙です。">
+  <meta name="theme-color" content="#0f2d4a">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>レーダー・プロッティング用紙</h1>
+      <p>観測値を入れると、相対運動線・CPA・速力三角形・アスペクト・避航の作図を順に描きます。</p>
+    </div>
+    <div class="top-actions">
+      <label class="preset">
+        <span>例題</span>
+        <select id="preset" aria-label="例題を読み込む"></select>
+      </label>
+      <button type="button" id="clear">空にする</button>
+      <button type="button" id="copy-link">リンクをコピー</button>
+      <button type="button" id="print">印刷</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="board" aria-label="プロッティング用紙">
+      <div class="sheet-frame" id="sheet-frame">
+        <svg id="sheet" class="sheet" role="img" aria-labelledby="sheet-title">
+          <title id="sheet-title">レーダー・プロッティング用紙。数値は「結果」の表にあります。</title>
+        </svg>
+      </div>
+      <div class="sheet-tools">
+        <span class="tip">ピンチか Ctrl＋ホイールで拡大、拡大中はドラッグで移動できます。</span>
+        <div class="zoom" role="group" aria-label="表示の拡大と縮小">
+          <button type="button" data-zoom="in" aria-label="拡大">＋</button>
+          <button type="button" data-zoom="out" aria-label="縮小">−</button>
+          <button type="button" data-zoom="fit">全体</button>
+          <button type="button" data-zoom="triangle">三角形を拡大</button>
+        </div>
+      </div>
+
+      <div class="steps">
+        <div class="step-row">
+          <button type="button" id="step-prev" aria-label="前の手順">‹ 前へ</button>
+          <ol class="step-tabs" id="step-tabs"></ol>
+          <button type="button" id="step-next" aria-label="次の手順">次へ ›</button>
+        </div>
+        <p class="step-text" id="step-text"></p>
+      </div>
+    </section>
+
+    <section class="inputs" aria-label="入力">
+      <form id="form" autocomplete="off" novalidate>
+        <fieldset>
+          <legend>自船</legend>
+          <div class="pair">
+            <label>真針路
+              <span class="unit-field"><input data-path="own.course" inputmode="decimal" maxlength="7" placeholder="040"><span>°</span></span>
+            </label>
+            <label>速力
+              <span class="unit-field"><input data-path="own.speed" inputmode="decimal" maxlength="7" placeholder="15"><span>ノット</span></span>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>物標（他船）</legend>
+          <div class="target-tabs" id="target-tabs" role="tablist" aria-label="物標の切り替え"></div>
+          <table class="obs">
+            <thead>
+              <tr><th scope="col">観測</th><th scope="col">時刻</th><th scope="col">真方位（°）</th><th scope="col">距離（海里）</th><th scope="col"><span class="sr-only">行の削除</span></th></tr>
+            </thead>
+            <tbody id="obs-rows"></tbody>
+          </table>
+          <div class="row-actions">
+            <button type="button" id="add-obs">観測を追加</button>
+            <button type="button" id="remove-target" class="quiet">この物標を削除</button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>避航（CPA を大きくする変針・変速）</legend>
+          <label class="check"><input type="checkbox" data-path="t.avoid.on"> 避航の作図をする</label>
+          <div class="avoid-fields" id="avoid-fields">
+            <label>動作を始める時刻
+              <input data-path="t.avoid.time" inputmode="numeric" maxlength="5" placeholder="1012">
+            </label>
+            <label>条件
+              <select data-path="t.avoid.mode">
+                <option value="cpa">CPA を指定の距離にする（変針・変速）</option>
+                <option value="bow">船首方向の指定の距離を通過させる（変速）</option>
+              </select>
+            </label>
+            <label>距離
+              <span class="unit-field"><input data-path="t.avoid.dist" inputmode="decimal" maxlength="7" placeholder="3"><span>海里</span></span>
+            </label>
+            <label id="side-field">他船を通す側
+              <select data-path="t.avoid.side">
+                <option value="auto">今と同じ側</option>
+                <option value="opposite">反対側</option>
+              </select>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>表示</legend>
+          <div class="pair">
+            <label>レンジ
+              <select data-path="range">
+                <option value="auto">自動</option>
+                <option value="3">3 海里</option>
+                <option value="6">6 海里</option>
+                <option value="12">12 海里</option>
+                <option value="24">24 海里</option>
+                <option value="48">48 海里</option>
+              </select>
+            </label>
+          </div>
+          <label class="check"><input type="checkbox" data-path="speedVector"> 速力ベクトル方式（中心から1時間ぶんの矢印）も描く</label>
+          <label class="check"><input type="checkbox" data-path="blank"> 白紙の用紙にする（印刷して手で作図する用）</label>
+        </fieldset>
+      </form>
+    </section>
+
+    <section class="results" aria-label="結果">
+      <h2>結果 <span class="results-target" id="results-target"></span></h2>
+      <div id="results" aria-live="polite"></div>
+    </section>
+
+    <section class="detail" aria-label="速力三角形の拡大図">
+      <h2>速力三角形の拡大図</h2>
+      <div class="detail-frame" id="detail-frame">
+        <svg id="detail" class="sheet static" role="img" aria-label="速力三角形の拡大図"></svg>
+      </div>
+      <ul class="legend">
+        <li><span class="swatch own"></span>自船（e→M1）</li>
+        <li><span class="swatch rel"></span>相対運動（M1→M2）</li>
+        <li><span class="swatch tgt"></span>他船の真の動き（e→M2）</li>
+        <li><span class="swatch cpa"></span>CPA</li>
+        <li><span class="swatch avoid"></span>避航</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>計算は、最初と最後の観測点を結んだ直線を相対運動線として行います。作図で読み取る値は線の引き方で少し変わるので、ここの値とぴったり一致しなくても手順が合っていれば問題ありません。</p>
+    <p>学習用の作図補助です。実際の航海や衝突回避の判断には使わないでください。入力した値は端末の外へ送信されません（リンクをコピーしたときは、値がそのリンクの中に入ります）。</p>
+  </footer>
+</body>
+</html>

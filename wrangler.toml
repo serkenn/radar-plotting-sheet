@@ -1,0 +1,4 @@
+# Cloudflare Pages configuration. The site is plain static files: there is no build step.
+name = "radar-plotting-sheet"
+pages_build_output_dir = "public"
+compatibility_date = "2026-11-25"
